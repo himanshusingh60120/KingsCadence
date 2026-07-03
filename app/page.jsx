@@ -91,4 +91,4 @@ export default function Home() {
 
       {leads.length > 0 && (
         <div style={box}>
-          <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap
+          <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
