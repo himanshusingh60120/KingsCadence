@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run build:catalog && next build",
     "start": "next start",
     "build:catalog": "node scripts/build-catalog.mjs"
   },
