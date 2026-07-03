@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/process/route.js": { "maxDuration": 60 },
+    "app/api/leads/route.js": { "maxDuration": 30 },
+    "app/api/tabs/route.js": { "maxDuration": 15 }
+  }
+}
