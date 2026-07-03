@@ -91,43 +91,4 @@ export default function Home() {
 
       {leads.length > 0 && (
         <div style={box}>
-          <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
-            <input style={{ ...input, width: 160 }} value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="Max leads (blank = all)" />
-            <label style={{ fontSize: 13, color: "#8b949e" }}>
-              <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} /> Regenerate filled rows
-            </label>
-            {!running
-              ? <button style={btn("#238636")} onClick={run}>Run generation</button>
-              : <button style={btn("#da3633")} onClick={() => { stopRef.current = true; }}>Stop</button>}
-            <span style={{ fontSize: 13, color: "#8b949e" }}>{leads.filter((l) => l.done).length}/{leads.length} filled</span>
-          </div>
-          <div style={{ maxHeight: 220, overflow: "auto", marginTop: 14, fontSize: 13 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <tbody>
-                {leads.map((l) => (
-                  <tr key={l.rowNumber} style={{ borderBottom: "1px solid #21262d" }}>
-                    <td style={{ padding: "6px 8px", color: "#8b949e" }}>{l.rowNumber}</td>
-                    <td style={{ padding: "6px 8px" }}>{l.name}</td>
-                    <td style={{ padding: "6px 8px" }}>{l.company}</td>
-                    <td style={{ padding: "6px 8px", color: "#8b949e" }}>{l.title}</td>
-                    <td style={{ padding: "6px 8px", color: l.done ? "#3fb950" : "#d29922" }}>{l.done ? "Ready" : (l.status || "Pending")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {log.length > 0 && (
-        <div style={{ ...box, fontFamily: "ui-monospace, monospace", fontSize: 12.5, maxHeight: 380, overflow: "auto" }}>
-          {log.map((l, i) => (
-            <div key={i} style={{ color: color[l.cls] || "#e6edf3", padding: "1px 0" }}>
-              <span style={{ color: "#484f58" }}>{l.t} </span>{l.msg}
-            </div>
-          ))}
-        </div>
-      )}
-    </main>
-  );
-}
+          <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap
