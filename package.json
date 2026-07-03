@@ -1,0 +1,19 @@
+{
+  "name": "kings-cadence",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "build:catalog": "node scripts/build-catalog.mjs"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "googleapis": "^140.0.1",
+    "next": "^14.2.5",
+    "openai": "^4.56.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
