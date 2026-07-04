@@ -3,6 +3,7 @@ import { readSheet, writeRowCells } from "../../../lib/google";
 import { companyWebsiteIntel, newsSignals, scrapeReport } from "../../../lib/research";
 import { mapProspectToReport } from "../../../lib/mapper";
 import { generateEmail } from "../../../lib/engine";
+import { resolveTimezone } from "../../../lib/timezone";
 
 export const maxDuration = 60;
 
@@ -20,8 +21,17 @@ export async function POST(req) {
     if (["replied", "dnc", "do not contact", "paused", "bounced"].includes(status)) {
       return NextResponse.json({ skipped: true, reason: status });
     }
+    // Country -> Timezone (state refines US/Canada/Australia). Independent of
+    // email generation: fills even on rows whose emails are already done.
+    const timezone = resolveTimezone(lead.country, lead.state);
+    if (timezone && (force || !lead["Timezone"])) {
+      await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, {
+        "Timezone": timezone
+      });
+    }
+
     if (!force && lead["E1 Subject"] && lead["E4 Body"]) {
-      return NextResponse.json({ skipped: true, reason: "already filled" });
+      return NextResponse.json({ skipped: true, reason: "already filled", timezone });
     }
     if (!(lead.email || "").includes("@")) {
       return NextResponse.json({ skipped: true, reason: "no email" });
@@ -67,6 +77,7 @@ export async function POST(req) {
 
     return NextResponse.json({
       ok: true,
+      timezone,
       report: report.title,
       relevance: report.reason,
       newsUsed: news.items.length,
