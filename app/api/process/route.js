@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { readSheet, writeRowCells } from "../../../lib/google";
-import { companyWebsiteIntel, newsSignals, scrapeReport } from "../../../lib/research";
-import { mapProspectToReport } from "../../../lib/mapper";
+import { companyWebsiteIntel, newsSignals, classifyEvents } from "../../../lib/research";
 import { generateEmail } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
 
@@ -21,6 +20,7 @@ export async function POST(req) {
     if (["replied", "dnc", "do not contact", "paused", "bounced"].includes(status)) {
       return NextResponse.json({ skipped: true, reason: status });
     }
+
     // Country -> Timezone (state refines US/Canada/Australia). Independent of
     // email generation: fills even on rows whose emails are already done.
     const timezone = resolveTimezone(lead.country, lead.state);
@@ -37,31 +37,30 @@ export async function POST(req) {
       return NextResponse.json({ skipped: true, reason: "no email" });
     }
 
-    // 1) SCREENING: live company research (site + fresh news, mergers, regulation)
+    // 1) SCREENING: live company research (its website + fresh news covering
+    //    M&A, capacity, closures, launches, partnerships, regulation, ...).
     const [companyIntel, news] = await Promise.all([
       companyWebsiteIntel(lead.companyWebsite),
       newsSignals(lead.companyName, lead.industry)
     ]);
 
-    // 2) REPORT MAPPING: 90% company domain, 10% role
-    const report = await mapProspectToReport(lead, {
-      ...companyIntel, newsSummary: news.newsSummary
-    });
+    // 2) EVENT TYPING: GPT turns noisy headlines into real, typed events, each
+    //    with the strategic "angle" it raises. [] => sector-level fallback.
+    const events = await classifyEvents(lead.companyName, lead.industry, news);
 
-    // 3) Hard numbers from the report page
-    const reportData = await scrapeReport(report.url);
+    // What this row anchored on (written to the sheet for visibility).
+    const signal = events.length
+      ? `${events[0].type}: ${events[0].what}`.slice(0, 240)
+      : "Sector-level (no company-specific event found)";
 
-    // 4) Generate E1-E4 sequentially (each sees the same intel, different angle)
-    const cells = {
-      "Matched Report": report.title,
-      "Report URL": report.url,
-      "Relevance": report.reason
-    };
+    // 3) Generate E1-E4 sequentially. Pure consultancy: no report, no market
+    //    figures. E1 opens on an event angle (or the sector shift if none).
+    const cells = { "Signal": signal };
     const results = [];
     for (let step = 1; step <= 4; step++) {
       const scKey = `E${step} Subject`, bcKey = `E${step} Body`;
       if (!force && lead[scKey] && lead[bcKey]) { results.push({ step, skipped: true }); continue; }
-      const out = await generateEmail(step, lead, report, reportData, companyIntel, news, report.reason);
+      const out = await generateEmail(step, lead, companyIntel, news, events);
       if (out.subject !== "GENERATION_FAILED") {
         cells[scKey] = out.subject;
         cells[bcKey] = out.body;
@@ -78,8 +77,8 @@ export async function POST(req) {
     return NextResponse.json({
       ok: true,
       timezone,
-      report: report.title,
-      relevance: report.reason,
+      signal,
+      eventsUsed: events.length,
       newsUsed: news.items.length,
       results
     });
