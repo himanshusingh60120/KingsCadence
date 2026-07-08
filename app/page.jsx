@@ -44,7 +44,7 @@ export default function Home() {
     let done = 0;
     for (const lead of queue.slice(0, max)) {
       if (stopRef.current) { addLog("Stopped by user.", "warn"); break; }
-      addLog(`Row ${lead.rowNumber} | ${lead.name} @ ${lead.company} ... researching + mapping + writing E1-E4`);
+      addLog(`Row ${lead.rowNumber} | ${lead.name} @ ${lead.company} ... screening + detecting events + writing E1-E4`);
       try {
         const r = await fetch("/api/process", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -54,8 +54,7 @@ export default function Home() {
         if (d.error) addLog(`  FAILED: ${d.error}`, "err");
         else if (d.skipped) addLog(`  skipped (${d.reason})`, "warn");
         else {
-          addLog(`  Report: ${d.report}`, "ok");
-          addLog(`  Why: ${d.relevance}`, "dim");
+          addLog(`  Signal: ${d.signal}`, d.eventsUsed ? "ok" : "dim");
           d.results.forEach((x) => x.subject && addLog(`  E${x.step}: "${x.subject}"`, "ok"));
           done++;
           setLeads((ls) => ls.map((l) => l.rowNumber === lead.rowNumber ? { ...l, done: true, status: "Ready" } : l));
@@ -71,7 +70,7 @@ export default function Home() {
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: "40px 20px" }}>
       <h1 style={{ fontSize: 22 }}>Kings Research — Cadence Generator</h1>
-      <p style={{ color: "#8b949e", marginTop: -8 }}>Select a sheet → screen each prospect (website + live news) → map to a report (90% company domain / 10% role) → write E1–E4 back to that sheet only.</p>
+      <p style={{ color: "#8b949e", marginTop: -8 }}>Select a sheet → screen each prospect (website + live news) → detect real company events → write four consultancy emails (E1–E4) back to that sheet only.</p>
 
       <div style={box}>
         <label style={{ fontSize: 13, color: "#8b949e" }}>Google Sheet URL or ID (share it with the service account as Editor)</label>
