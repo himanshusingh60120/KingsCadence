@@ -45,13 +45,15 @@ export async function POST(req) {
     ]);
 
     // 2) EVENT TYPING: GPT turns noisy headlines into real, typed events, each
-    //    with the strategic "angle" it raises. [] => sector-level fallback.
-    const events = await classifyEvents(lead.companyName, lead.industry, news);
+    //    with the strategic "angle" it raises, and drops third-party industry
+    //    news that has no bearing on what THIS company actually does (judged
+    //    against the scraped site description). [] => sector-level fallback.
+    const events = await classifyEvents(lead.companyName, lead.industry, news, companyIntel.description);
 
     // What this row anchored on (written to the sheet for visibility).
     const signal = events.length
       ? `${events[0].type}: ${events[0].what}`.slice(0, 240)
-      : "Sector-level (no company-specific event found)";
+      : "Sector-level (no relevant company-specific event found)";
 
     // 3) Generate E1-E4 sequentially. Pure consultancy: no report, no market
     //    figures. E1 opens on an event angle (or the sector shift if none).
