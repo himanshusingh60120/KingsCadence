@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { readSheet, writeRowCells } from "../../../lib/google";
 import { companyWebsiteIntel, newsSignals, classifyEvents } from "../../../lib/research";
-import { generateEmail } from "../../../lib/engine";
+import { generateEmail, reviewStatus } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
 
 export const maxDuration = 60;
@@ -55,9 +55,24 @@ export async function POST(req) {
       ? `${events[0].type}: ${events[0].what}`.slice(0, 240)
       : "Sector-level (no relevant company-specific event found)";
 
-    // 3) Generate E1-E4 sequentially. Pure consultancy: no report, no market
-    //    figures. E1 opens on an event angle (or the sector shift if none).
+    // Decide if this row is safe to auto-send or should be held for a human.
+    const review = reviewStatus(lead, events);
     const cells = { "Signal": signal };
+
+    // Broken company data (a bare domain / empty) would risk a hallucinated
+    // company name (e.g. "Morson Praxis"), so skip generation and flag it.
+    if (review.skipGeneration) {
+      cells["Status"] = `Needs review: ${review.reason}`;
+      await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, cells);
+      return NextResponse.json({
+        ok: true, timezone, signal, held: review.reason,
+        eventsUsed: events.length, newsUsed: news.items.length, results: []
+      });
+    }
+
+    // 3) Generate E1-E4 sequentially, give-first with no meeting-ask. E1 leads
+    //    on a supplied insight, else an outside angle on the event, else the
+    //    company's own business. E3 is a genuine give, not a fabricated peer.
     const results = [];
     for (let step = 1; step <= 4; step++) {
       const scKey = `E${step} Subject`, bcKey = `E${step} Body`;
@@ -72,7 +87,9 @@ export async function POST(req) {
       }
     }
     const anyEmail = results.some((r) => r.subject);
-    if (anyEmail) cells["Status"] = "Ready";
+    // Only rows with a real signal AND clean data are auto-marked Ready; a
+    // no-signal draft is generated but flagged so a person decides before send.
+    if (anyEmail) cells["Status"] = review.ready ? "Ready" : `Needs review: ${review.reason}`;
 
     await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, cells);
 
