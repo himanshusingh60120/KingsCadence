@@ -1,15 +1,18 @@
 # Kings Cadence
 
 Sheet-driven cold email cadence generator for Kings Research. Select a Google
-Sheet tab, and for every prospect it: (1) screens the company live, reading its
+Sheet tab, and for every prospect it: 
+(1) screens the company live, reading its
 website to learn what the company actually does and scanning Google News for
 genuine corporate events (M&A, capacity expansions, facility closures,
 geographic expansion, product launches, joint ventures, partnerships,
 investment announcements, major deals, price/input-cost moves and regulatory
-changes in the last 30-120 days), (2) uses GPT to type those headlines into
+changes in the last 30-120 days) 
+(2) uses GPT to type those headlines into
 real events, each with the strategic question it raises, keeping only the ones
 that genuinely bear on what that specific company does and discarding generic
-industry news about unrelated players, and (3) writes 4 consultancy emails
+industry news about unrelated players
+(3) writes 4 consultancy emails
 (E1 Subject/Body ... E4 Subject/Body) back into that sheet only.
 
 Kings Research is positioned throughout as a strategic advisory and
