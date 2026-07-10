@@ -39,10 +39,21 @@ export async function POST(req) {
 
     // 1) SCREENING: live company research (its website + fresh news covering
     //    M&A, capacity, closures, launches, partnerships, regulation, ...).
-    const [companyIntel, news] = await Promise.all([
+    let [companyIntel, news] = await Promise.all([
       companyWebsiteIntel(lead.companyWebsite),
       newsSignals(lead.companyName, lead.industry)
     ]);
+
+    // If the company column was a bare domain (or empty), recover the real
+    // company name by crawling the site, then re-run the news search with the
+    // real name so the row gets proper signal instead of being skipped.
+    const looksDomain = (c) => !!c && !c.includes(" ") && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(c);
+    let companyNameFixed = false;
+    if ((!lead.companyName || looksDomain(lead.companyName)) && companyIntel.companyName) {
+      lead.companyName = companyIntel.companyName;
+      companyNameFixed = true;
+      news = await newsSignals(lead.companyName, lead.industry);
+    }
 
     // 2) EVENT TYPING: GPT turns noisy headlines into real, typed events, each
     //    with the strategic "angle" it raises, and drops third-party industry
@@ -58,6 +69,8 @@ export async function POST(req) {
     // Decide if this row is safe to auto-send or should be held for a human.
     const review = reviewStatus(lead, events);
     const cells = { "Signal": signal };
+    // Surface the recovered real company name back in the sheet's company column.
+    if (companyNameFixed) cells["company"] = lead.companyName;
 
     // Broken company data (a bare domain / empty) would risk a hallucinated
     // company name (e.g. "Morson Praxis"), so skip generation and flag it.
