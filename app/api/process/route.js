@@ -75,18 +75,27 @@ export async function POST(req) {
     //    company's own business. E3 is a genuine give, not a fabricated peer.
     const results = [];
     const usedSubjects = [];
+    const usedCTAs = [];
+    const lastLine = (b) => {
+      const ls = (b || "").split("\n").map((l) => l.trim()).filter(Boolean);
+      return ls.length ? ls[ls.length - 1].toLowerCase() : "";
+    };
     for (let step = 1; step <= 4; step++) {
       const scKey = `E${step} Subject`, bcKey = `E${step} Body`;
       if (!force && lead[scKey] && lead[bcKey]) {
         if (lead[scKey]) usedSubjects.push(lead[scKey]);
+        const c = lastLine(lead[bcKey]);
+        if (c) usedCTAs.push(c);
         results.push({ step, skipped: true });
         continue;
       }
-      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects);
+      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs);
       if (out.subject !== "GENERATION_FAILED") {
         cells[scKey] = out.subject;
         cells[bcKey] = out.body;
         usedSubjects.push(out.subject);
+        const c = lastLine(out.body);
+        if (c) usedCTAs.push(c);
         results.push({ step, subject: out.subject });
       } else {
         results.push({ step, failed: true });
