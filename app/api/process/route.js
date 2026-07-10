@@ -74,13 +74,19 @@ export async function POST(req) {
     //    on a supplied insight, else an outside angle on the event, else the
     //    company's own business. E3 is a genuine give, not a fabricated peer.
     const results = [];
+    const usedSubjects = [];
     for (let step = 1; step <= 4; step++) {
       const scKey = `E${step} Subject`, bcKey = `E${step} Body`;
-      if (!force && lead[scKey] && lead[bcKey]) { results.push({ step, skipped: true }); continue; }
-      const out = await generateEmail(step, lead, companyIntel, news, events);
+      if (!force && lead[scKey] && lead[bcKey]) {
+        if (lead[scKey]) usedSubjects.push(lead[scKey]);
+        results.push({ step, skipped: true });
+        continue;
+      }
+      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects);
       if (out.subject !== "GENERATION_FAILED") {
         cells[scKey] = out.subject;
         cells[bcKey] = out.body;
+        usedSubjects.push(out.subject);
         results.push({ step, subject: out.subject });
       } else {
         results.push({ step, failed: true });
