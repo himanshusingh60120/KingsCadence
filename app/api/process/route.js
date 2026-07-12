@@ -6,6 +6,38 @@ import { resolveTimezone } from "../../../lib/timezone";
 
 export const maxDuration = 60;
 
+// Per-instance cache: on Vercel a warm serverless instance is often reused
+// across consecutive invocations (e.g. a bulk run processing many rows back
+// to back). Multiple contacts at the SAME company should not re-scrape the
+// site or re-run the same news queries. Keyed by domain (falls back to
+// company name); a fresh cold instance simply starts empty, this is a
+// best-effort speed/cost win, not a correctness dependency.
+const researchCache = globalThis.__kc_researchCache || (globalThis.__kc_researchCache = new Map());
+const RESEARCH_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6h: long enough to cover a bulk run, short enough to stay fresh
+
+async function getCachedResearch(cacheKey, fn) {
+  const hit = researchCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < RESEARCH_CACHE_TTL_MS) return hit.value;
+  const value = await fn();
+  researchCache.set(cacheKey, { value, at: Date.now() });
+  return value;
+}
+
+async function research(lead) {
+  const cacheKey = (lead.companyWebsite || lead.companyName || "").toLowerCase().trim();
+  const runBoth = () => Promise.all([
+    companyWebsiteIntel(lead.companyWebsite),
+    newsSignals(lead.companyName, lead.industry, {
+      domain: lead.companyWebsite,
+      headCount: lead.companyHeadCount,
+      revenue: lead.companyRevenue,
+      subIndustry: lead.subIndustry
+    })
+  ]);
+  const [companyIntel, news] = cacheKey ? await getCachedResearch(cacheKey, runBoth) : await runBoth();
+  return { companyIntel, news };
+}
+
 export async function POST(req) {
   try {
     const { spreadsheetId, sheetName, rowNumber, force } = await req.json();
@@ -39,10 +71,7 @@ export async function POST(req) {
 
     // 1) SCREENING: live company research (its website + fresh news covering
     //    M&A, capacity, closures, launches, partnerships, regulation, ...).
-    let [companyIntel, news] = await Promise.all([
-      companyWebsiteIntel(lead.companyWebsite),
-      newsSignals(lead.companyName, lead.industry)
-    ]);
+    let { companyIntel, news } = await research(lead);
 
     // If the company column was a bare domain (or empty), recover the real
     // company name by crawling the site, then re-run the news search with the
@@ -52,7 +81,12 @@ export async function POST(req) {
     if ((!lead.companyName || looksDomain(lead.companyName)) && companyIntel.companyName) {
       lead.companyName = companyIntel.companyName;
       companyNameFixed = true;
-      news = await newsSignals(lead.companyName, lead.industry);
+      news = await newsSignals(lead.companyName, lead.industry, {
+        domain: lead.companyWebsite,
+        headCount: lead.companyHeadCount,
+        revenue: lead.companyRevenue,
+        subIndustry: lead.subIndustry
+      });
     }
 
     // 2) EVENT TYPING: GPT turns noisy headlines into real, typed events, each
