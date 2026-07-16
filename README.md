@@ -55,6 +55,35 @@ you:
 - Only rows with a genuine, relevant event **and** clean company data are
   auto-marked **`Ready`**.
 
+## Never hook on the prospect's own bad news
+
+A negative or sensitive event at the prospect's **own** company (an executive
+detained or arrested, a lawsuit, a probe, a scandal, layoffs, a bankruptcy, a
+fatal incident, a recall, a breach, sanctions) is **never** used as a signal or
+mentioned in an email. Cold-emailing an employee about their employer's crisis
+is ambulance-chasing: it embarrasses the reader and burns the domain. The
+classifier marks such events sensitive and a keyword backstop in code drops
+them regardless, so the row anchors on the next-best real event (or falls back
+to sector-level). The same event at a **competitor** is kept, soberly framed,
+as the market signal it is for the prospect.
+
+## Competitor moves are the primary hook, and new pipeline
+
+Prospects have full information about their own company and almost none about
+rivals; that gap is what a market-intelligence firm sells. So:
+
+- **Competitor watch.** Each prospect's named competitors (an optional
+  `Competitors` sheet column, else up to 5 real rivals derived by the model
+  from the scraped site) are news-searched too. A relevant rival or
+  market/regulatory move is ranked **above** the prospect's own good news as
+  the Email 1 anchor, framed as what it means for the prospect's share,
+  pricing, or pipeline.
+- **Derived Targets tab.** Every strong event detected about a prospect fans
+  out to that prospect's competitors as new outreach rows on a
+  `Derived Targets` tab (target company, why they compete, the event as their
+  ready-made signal, and the angle). The companies most likely to buy a read
+  on "Echodyne's $40M factory" are Echodyne's competitors, not Echodyne.
+
 ## Relevance & tone guardrails
 
 A few rules are enforced in code, beyond the prompt:
