@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { readSheet, writeRowCells } from "../../../lib/google";
-import { companyWebsiteIntel, newsSignals, classifyEvents } from "../../../lib/research";
+import { readSheet, writeRowCells, appendRows } from "../../../lib/google";
+import { companyWebsiteIntel, newsSignals, classifyEvents, deriveCompetitors } from "../../../lib/research";
 import { generateEmail, reviewStatus } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
 
@@ -23,19 +23,37 @@ async function getCachedResearch(cacheKey, fn) {
   return value;
 }
 
+// Competitors for a prospect: the sheet's own `Competitors` column wins (a
+// human named them); otherwise the model derives up to 5 real, named rivals
+// from the scraped site description. Derived names are search seeds and
+// prospecting suggestions only, never stated as fact inside an email.
+function sheetCompetitors(lead) {
+  return String(lead.competitors || "")
+    .split(/[,;|]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((name) => ({ name, why: "" }));
+}
+
 async function research(lead) {
   const cacheKey = (lead.companyWebsite || lead.companyName || "").toLowerCase().trim();
-  const runBoth = () => Promise.all([
-    companyWebsiteIntel(lead.companyWebsite),
-    newsSignals(lead.companyName, lead.industry, {
+  const run = async () => {
+    const companyIntel = await companyWebsiteIntel(lead.companyWebsite);
+    let competitors = sheetCompetitors(lead);
+    if (!competitors.length) {
+      competitors = await deriveCompetitors(lead.companyName, lead.industry, companyIntel.description);
+    }
+    const news = await newsSignals(lead.companyName, lead.industry, {
       domain: lead.companyWebsite,
       headCount: lead.companyHeadCount,
       revenue: lead.companyRevenue,
-      subIndustry: lead.subIndustry
-    })
-  ]);
-  const [companyIntel, news] = cacheKey ? await getCachedResearch(cacheKey, runBoth) : await runBoth();
-  return { companyIntel, news };
+      subIndustry: lead.subIndustry,
+      competitors
+    });
+    return [companyIntel, news, competitors];
+  };
+  const [companyIntel, news, competitors] = cacheKey ? await getCachedResearch(cacheKey, run) : await run();
+  return { companyIntel, news, competitors };
 }
 
 export async function POST(req) {
@@ -71,7 +89,7 @@ export async function POST(req) {
 
     // 1) SCREENING: live company research (its website + fresh news covering
     //    M&A, capacity, closures, launches, partnerships, regulation, ...).
-    let { companyIntel, news } = await research(lead);
+    let { companyIntel, news, competitors } = await research(lead);
 
     // If the company column was a bare domain (or empty), recover the real
     // company name by crawling the site, then re-run the news search with the
@@ -85,7 +103,8 @@ export async function POST(req) {
         domain: lead.companyWebsite,
         headCount: lead.companyHeadCount,
         revenue: lead.companyRevenue,
-        subIndustry: lead.subIndustry
+        subIndustry: lead.subIndustry,
+        competitors
       });
     }
 
@@ -155,12 +174,50 @@ export async function POST(req) {
 
     await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, cells);
 
+    // ── DERIVED TARGETS ──────────────────────────────────────────────────
+    // A real event at THIS prospect is also a ready-made outreach signal for
+    // its competitors: they will care more about how a rival's move hits
+    // their market and share than the rival itself does. Each strong event
+    // about the prospect (subject "self") fans out to its named competitors
+    // as new prospecting rows on a "Derived Targets" tab, deduped per run.
+    let derivedTargets = 0;
+    try {
+      const selfEvent = events.find((e) => e.subject === "self" && e.scope === "company");
+      if (selfEvent && competitors && competitors.length) {
+        const seen = globalThis.__kc_derivedSeen || (globalThis.__kc_derivedSeen = new Set());
+        const rowsOut = [];
+        for (const c of competitors.slice(0, 5)) {
+          const key = `${c.name}::${selfEvent.what}`.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          rowsOut.push([
+            c.name,
+            c.why || "",
+            lead.companyName,
+            `${selfEvent.type}: ${selfEvent.what}`,
+            selfEvent.angle || "",
+            sheetName,
+            String(rowNumber),
+            new Date().toISOString().slice(0, 10)
+          ]);
+        }
+        if (rowsOut.length) {
+          await appendRows(spreadsheetId, "Derived Targets", [
+            "Target Company", "Why they compete", "Event Source Company",
+            "Event (their signal)", "Angle for the target", "Source Tab", "Source Row", "Added"
+          ], rowsOut);
+          derivedTargets = rowsOut.length;
+        }
+      }
+    } catch { /* prospect row already written; derived targets are best-effort */ }
+
     return NextResponse.json({
       ok: true,
       timezone,
       signal,
       eventsUsed: events.length,
       newsUsed: news.items.length,
+      derivedTargets,
       results
     });
   } catch (e) {
