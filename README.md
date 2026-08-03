@@ -9,8 +9,12 @@ investment announcements, major deals, price/input-cost moves and regulatory
 changes in the last 30-120 days), (2) uses GPT to type those headlines into
 real events, each with the strategic question it raises, keeping only the ones
 that genuinely bear on what that specific company does and discarding generic
-industry news about unrelated players, and (3) writes 4 consultancy emails
-(E1 Subject/Body ... E4 Subject/Body) back into that sheet only.
+industry news about unrelated players, and (3) writes **one subject line and
+four email bodies** back into that sheet only.
+
+Rows are gated on job title first: only prospects inside the approved title
+bracket are researched or written for. Everything else is stamped
+`Not present in JT` before a single API call is made.
 
 Kings Research is positioned as a strategic advisory and market-intelligence
 partner, **not** a report vendor, and every email is built to **give before it
@@ -30,6 +34,71 @@ genuine give (a specific read or breakdown you offer to share, **not** a
 fabricated "a comparable client" story), and E4 a forward-looking angle + an
 open door. No email asks for a call or "20 minutes".
 
+**One subject line, not four.** E2-E4 send as replies on the same Smartlead
+thread and inherit E1's subject as `Re: ...`, so only `E1 Subject` is
+generated. This removes three model calls' worth of subject generation per
+prospect and three more chances for the banned-word guard to reject an
+otherwise-good body.
+
+## The job title (JT) gate
+
+`lib/titles.js` decides whether a row is worth spending money on, and runs
+**before** the website scrape, the news queries, and every OpenAI call. On a
+typical purchased list it drops 40-60% of rows, which makes it the largest
+cost saving in the pipeline as well as the targeting filter.
+
+A lead passes through either of two doors:
+
+- **Approved title.** One of the named titles from the brief (Head of Strategy,
+  Director/Manager Corporate Strategy, VP/Director Market Intelligence,
+  Director Business Insights, Strategy & Planning Lead, Market Research
+  Manager, Competitive Intelligence Analyst/Manager, CMO, VP/Director
+  Marketing, VP/Director Product Marketing, Head of Product Strategy,
+  Director Customer/Consumer Insights, Product Manager/Director, CEO/COO,
+  Chief Commercial Officer, VP/Director Business Development, Head of Global
+  Expansion / International Strategy). These bypass the seniority floor,
+  because the list already encodes the seniority intended: Competitive
+  Intelligence Analyst is approved by name even though Analyst sits below
+  Manager.
+- **Function + seniority.** The title or department falls in an approved family
+  (Strategy, Insights, Marketing, Product, Procurement, Data & Analytics,
+  Commercial/BD, Expansion, Exec) **and** clears that family's floor.
+
+Floors are deliberately per-family rather than one global "Manager+", taken
+from what the approved list actually named:
+
+| Family | Floor | Why |
+|---|---|---|
+| Strategy | Manager+ | list names Manager, Corporate Strategy |
+| Insights / Market Intel / CI | Manager+ | CI Analyst passes via the named list |
+| Marketing | **Director+** | list only ever named CMO, VP, Director |
+| Product | Manager+ | list names Product Manager |
+| Procurement | Manager+ | brief says Manager+ |
+| Data & Analytics | Manager+ | brief says Manager+ |
+| Commercial / BD | **Director+** | list names VP/Director BD, CCO |
+| Global Expansion | Director+ | list names Head of |
+| CEO / COO | CXO | list names CEO/COO only |
+
+Japanese titles are handled natively. `経営企画` (corporate planning) is the
+real strategy seat in a Japanese org and carries more internal weight than the
+US equivalent, so it maps to STRATEGY, with `部長 / 課長 / 本部長 / 執行役員`
+mapping onto the seniority ladder.
+
+Hard denials run first and beat everything: interns, assistants, recruiters,
+HR, support engineers, SDR/BDR, account executives and account managers.
+`Chief Executive Officer` is correctly *not* caught by the junior sense of
+"executive" (as in `Marketing Executive`, the India/UK usage).
+
+### Dry-run it before you spend anything
+
+```bash
+node scripts/jt-check.mjs leads.csv --out=triage.csv
+```
+
+No network, no OpenAI, no Sheets. Prints the pass rate, what passed and why,
+and the ranked rejection reasons. Run it on every new list: a pass rate far
+outside 30-60% is usually a list problem rather than a gate problem.
+
 ## Give the reader something real: the `Insight` column
 
 The single biggest lever on reply rate is leading with a real, specific finding
@@ -46,6 +115,10 @@ prospects are inherently generic, this column is how you fix that.
 Not every row should be blasted. The pipeline holds the ones that would embarrass
 you:
 
+- **Out of the title bracket** is stamped `Not present in JT` and **skipped
+  entirely**, before any research or generation spend. The `Signal` column
+  records why (e.g. `JT filter: MARKETING below seniority floor (is Manager,
+  needs Director+)`) so a bad list is diagnosable at a glance.
 - **Broken company data** (the company field is a bare domain like `usi.edu`, or
   empty) is **skipped entirely** and marked `Needs review: ...`. This prevents the
   model from inventing a company name to fill the gap.
@@ -129,13 +202,35 @@ state city email linkedin address status verificationStatus catchAllStatus`.
 Header spellings are flexible (`fname`/`company`/`job_title`/... are all
 recognized). Optional: an **`Insight`** column to supply a real give per row.
 
-Output columns are appended automatically if missing: `Signal, Timezone,
-E1 Subject, E1 Body, E2 Subject, E2 Body, E3 Subject, E3 Body, E4 Subject,
-E4 Body, Status`. `Signal` records what each row anchored on (the top relevant
-detected event, or "Sector-level" when none was found). `Status` is `Ready` only
-for rows with a real signal and clean company data; otherwise
-`Needs review: <reason>` (a domain-as-company or missing name is skipped; a
-no-signal row is drafted but held).
+Output columns are appended automatically if missing, **in this order**:
+
+| Col | Header | Contents |
+|---|---|---|
+| I | `E1 Subject` | the one subject line for the whole thread |
+| J | `E1 Body` | email 1 |
+| K | `E2 Body` | email 2 (thread reply) |
+| L | `E3 Body` | email 3 (thread reply) |
+| M | `E4 Body` | email 4 (thread reply) |
+| N | `Status` | `Ready` / `Not present in JT` / `Needs review: ...` |
+| O | `Signal` | what the row anchored on, or the JT rejection reason |
+| P | `Timezone` | resolved from country + state |
+
+I:N assumes the standard **8 input columns in A:H**. If your input block is a
+different width the headers still resolve correctly by name, but the letters
+shift, so map Smartlead against the header names rather than the letters.
+
+`Status` values:
+
+- `Ready` - in the title bracket, a real signal, clean company data. Safe to send.
+- `Not present in JT` - outside the approved title bracket. No emails generated.
+- `Needs review: <reason>` - drafted but held for a human (no signal found, or
+  a domain-as-company / missing company name, which is skipped entirely).
+
+**Migrating an existing sheet:** delete the old `E2 Subject`, `E3 Subject` and
+`E4 Subject` columns before the first run, or start on a fresh tab. The old
+"insert Timezone before E1 Subject" migration was removed because it shifted
+every output column one to the right, which is exactly what breaks the I:N
+block Smartlead maps against. Output columns are now only ever appended.
 
 Rows with Status = replied / dnc / paused / bounced are never touched.
 Filled rows are skipped unless "Regenerate filled rows" is checked.
