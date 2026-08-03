@@ -3,6 +3,7 @@ import { readSheet, writeRowCells, appendRows } from "../../../lib/google";
 import { companyWebsiteIntel, newsSignals, classifyEvents, deriveCompetitors } from "../../../lib/research";
 import { generateEmail, reviewStatus } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
+import { jobTitleGate, NOT_IN_JT } from "../../../lib/titles";
 
 export const maxDuration = 60;
 
@@ -69,6 +70,24 @@ export async function POST(req) {
     const status = (lead.Status || "").toLowerCase();
     if (["replied", "dnc", "do not contact", "paused", "bounced"].includes(status)) {
       return NextResponse.json({ skipped: true, reason: status });
+    }
+
+    // ── JOB TITLE GATE ───────────────────────────────────────────────────
+    // Runs BEFORE anything that costs money. An out-of-bracket row never
+    // scrapes a website, never queries Google News, and never touches the
+    // OpenAI API: it is stamped "Not present in JT" and the row is done.
+    // On a typical purchased list this drops 40-60% of rows, so it is also
+    // the single biggest cost saving in the pipeline.
+    const jt = jobTitleGate(lead);
+    if (!jt.inJT) {
+      await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, {
+        "Status": NOT_IN_JT,
+        "Signal": `JT filter: ${jt.reason}`
+      });
+      return NextResponse.json({
+        ok: true, notInJT: true, reason: jt.reason,
+        title: lead.title || "", seniority: jt.rankLabel, results: []
+      });
     }
 
     // Country -> Timezone (state refines US/Canada/Australia). Independent of
@@ -146,28 +165,34 @@ export async function POST(req) {
       const ls = (b || "").split("\n").map((l) => l.trim()).filter(Boolean);
       return ls.length ? ls[ls.length - 1].toLowerCase() : "";
     };
+    // ONE subject (E1 only). E2-E4 send as replies on the same Smartlead
+    // thread and inherit it as "Re: ...", so the sheet carries E1 Subject
+    // plus four bodies. Column map: I=E1 Subject, J:M=E1-E4 Body, N=Status.
     for (let step = 1; step <= 4; step++) {
-      const scKey = `E${step} Subject`, bcKey = `E${step} Body`;
-      if (!force && lead[scKey] && lead[bcKey]) {
-        if (lead[scKey]) usedSubjects.push(lead[scKey]);
+      const bcKey = `E${step} Body`;
+      const scKey = step === 1 ? "E1 Subject" : null;
+      const alreadyDone = scKey ? (lead[scKey] && lead[bcKey]) : lead[bcKey];
+      if (!force && alreadyDone) {
         const c = lastLine(lead[bcKey]);
         if (c) usedCTAs.push(c);
         results.push({ step, skipped: true });
         continue;
       }
       const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs);
-      if (out.subject !== "GENERATION_FAILED") {
-        cells[scKey] = out.subject;
+      if (out.body !== "GENERATION_FAILED") {
+        if (scKey && out.subject) {
+          cells[scKey] = out.subject;
+          usedSubjects.push(out.subject);
+        }
         cells[bcKey] = out.body;
-        usedSubjects.push(out.subject);
         const c = lastLine(out.body);
         if (c) usedCTAs.push(c);
-        results.push({ step, subject: out.subject });
+        results.push({ step, subject: out.subject || "(thread reply)" });
       } else {
         results.push({ step, failed: true });
       }
     }
-    const anyEmail = results.some((r) => r.subject);
+    const anyEmail = results.some((r) => r.subject && !r.failed);
     // Only rows with a real signal AND clean data are auto-marked Ready; a
     // no-signal draft is generated but flagged so a person decides before send.
     if (anyEmail) cells["Status"] = review.ready ? "Ready" : `Needs review: ${review.reason}`;
