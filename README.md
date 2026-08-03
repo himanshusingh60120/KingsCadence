@@ -40,7 +40,48 @@ generated. This removes three model calls' worth of subject generation per
 prospect and three more chances for the banned-word guard to reject an
 otherwise-good body.
 
-## The job title (JT) gate
+## Relevance: judged, not pattern-matched
+
+The regex gate was too strict, and strictness was the wrong tool. A title list
+cannot know that "Airspace Innovation" at DroneUp is a senior product seat,
+that "Area Vice President" at a radar company runs a region and buys
+competitive intelligence, or that an Assistant Director of Student Conduct is
+irrelevant no matter how senior she is.
+
+`lib/relevance.js` asks the question an SDR actually asks:
+
+> Would this person, at **this company**, plausibly buy or champion strategic
+> market intelligence?
+
+Two things are judged and both must pass:
+
+- **Company fit.** Does this organisation buy market intelligence at all? A
+  drone manufacturer does. A university's student affairs office and a regional
+  disaster-restoration franchise do not, at any seniority. **The old gate had
+  this nowhere, and it is the more important of the two filters** — most of the
+  waste in the last run was Utah Disaster Kleenup and a state university, not
+  wrong titles.
+- **Person fit.** `buyer` (owns the budget or decision), `influencer` (would use
+  the intelligence and can champion it upward), or `no`.
+
+The judge is deliberately **inclusive on the person, strict on the company**.
+Missing a real buyer is a worse error than including a marginal one, so a vague
+or mislabelled title at a good company is judged on what the seat most likely
+does and returns `influencer` rather than `no`.
+
+**Cost.** The model is only consulted on ambiguous rows. Obvious rejects
+(intern, recruiter, student, SDR) short-circuit on regex before any spend, and
+verdicts are cached per title+company. If the API is unreachable the row falls
+back to the title rules and is passed rather than dropped: an outage must never
+look like a rejection.
+
+The verdict is written into `Signal` as `[buyer]` or `[influencer]` so you can
+see why each row was kept.
+
+`lib/titles.js` is still there and still used for the fast paths and the
+fallback, but it is no longer the decision-maker.
+
+## The old job title (JT) gate
 
 `lib/titles.js` decides whether a row is worth spending money on, and runs
 **before** the website scrape, the news queries, and every OpenAI call. On a
