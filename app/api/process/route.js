@@ -1,9 +1,29 @@
 import { NextResponse } from "next/server";
-import { readSheet, writeRowCells, appendRows } from "../../../lib/google";
+import { readSheet, writeRowCells, appendRows, readTabSafe, ensureTab } from "../../../lib/google";
 import { companyWebsiteIntel, newsSignals, classifyEvents, deriveCompetitors } from "../../../lib/research";
-import { generateEmail, reviewStatus } from "../../../lib/engine";
+import { generateEmail, reviewStatus, sortEvents } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
-import { jobTitleGate, NOT_IN_JT } from "../../../lib/titles";
+import { jobTitleGate, isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/titles";
+import { parseInsights, matchInsight, INSIGHTS_HEADER } from "../../../lib/insights";
+
+// The Insight Library is read once per warm instance, not once per row: it is
+// the same 40-60 findings for every prospect in a run.
+const INSIGHTS_TTL_MS = 10 * 60 * 1000;
+async function loadInsights(spreadsheetId) {
+  const cache = globalThis.__kc_insights || (globalThis.__kc_insights = new Map());
+  const hit = cache.get(spreadsheetId);
+  if (hit && Date.now() - hit.at < INSIGHTS_TTL_MS) return hit.value;
+  let rows = await readTabSafe(spreadsheetId, "Insights");
+  if (!rows.length) {
+    // First run on a sheet: create the tab with its header row so the shape
+    // of a finding is obvious without reading the docs.
+    try { await ensureTab(spreadsheetId, "Insights", INSIGHTS_HEADER); } catch { /* non-fatal */ }
+    rows = await readTabSafe(spreadsheetId, "Insights");
+  }
+  const value = parseInsights(rows);
+  cache.set(spreadsheetId, { value, at: Date.now() });
+  return value;
+}
 
 export const maxDuration = 60;
 
@@ -80,12 +100,19 @@ export async function POST(req) {
     // the single biggest cost saving in the pipeline.
     const jt = jobTitleGate(lead);
     if (!jt.inJT) {
+      // Two different failures, two different statuses. A Marketing Manager is
+      // correctly out of scope and dead. "Airspace Innovation" is a senior
+      // person whose title column holds a team name, and is recoverable with
+      // one enrichment pass, so it must not be binned with the first kind.
+      const enrichable = isUnparseableTitle(lead);
       await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, {
-        "Status": NOT_IN_JT,
-        "Signal": `JT filter: ${jt.reason}`
+        "Status": enrichable ? NEEDS_ENRICHMENT : NOT_IN_JT,
+        "Signal": enrichable
+          ? `title field is not a title ("${lead.title}"), re-enrich from LinkedIn`
+          : `JT filter: ${jt.reason}`
       });
       return NextResponse.json({
-        ok: true, notInJT: true, reason: jt.reason,
+        ok: true, notInJT: true, enrichable, reason: jt.reason,
         title: lead.title || "", seniority: jt.rankLabel, results: []
       });
     }
@@ -131,15 +158,32 @@ export async function POST(req) {
     //    with the strategic "angle" it raises, and drops third-party industry
     //    news that has no bearing on what THIS company actually does (judged
     //    against the scraped site description). [] => sector-level fallback.
-    const events = await classifyEvents(lead.companyName, lead.industry, news, companyIntel.description);
+    const rawEvents = await classifyEvents(lead.companyName, lead.industry, news, companyIntel.description);
+
+    // ── ANCHOR ORDER, ENFORCED IN CODE ───────────────────────────────────
+    // Competitor and market events sort to the front. The prompt already said
+    // to lead on them, but models anchor on whatever sits at position 1, so a
+    // row with a live market event could still open on the prospect's own
+    // product launch. Sorting removes the choice.
+    const events = sortEvents(rawEvents);
+
+    // ── THE GIVE ─────────────────────────────────────────────────────────
+    // A matched proprietary finding outranks every news event, and works on
+    // the majority of rows that have no news at all. This is the difference
+    // between "here is your own website back" and "here is a number you
+    // cannot get anywhere else".
+    const library = await loadInsights(spreadsheetId);
+    const insight = matchInsight(lead, companyIntel, library);
 
     // What this row anchored on (written to the sheet for visibility).
-    const signal = events.length
-      ? `${events[0].type}: ${events[0].what}`.slice(0, 240)
-      : "Sector-level (no relevant company-specific event found)";
+    const signal = insight
+      ? `finding: ${insight.finding}`.slice(0, 240)
+      : events.length
+        ? `${events[0].subject}/${events[0].type}: ${events[0].what}`.slice(0, 240)
+        : "NO GIVE (no finding matched, no event found)";
 
     // Decide if this row is safe to auto-send or should be held for a human.
-    const review = reviewStatus(lead, events);
+    const review = reviewStatus(lead, events, insight);
     const cells = { "Signal": signal };
     // Surface the recovered real company name back in the sheet's company column.
     if (companyNameFixed) cells["company"] = lead.companyName;
@@ -161,6 +205,7 @@ export async function POST(req) {
     const results = [];
     const usedSubjects = [];
     const usedCTAs = [];
+    const qualityIssues = [];
     const lastLine = (b) => {
       const ls = (b || "").split("\n").map((l) => l.trim()).filter(Boolean);
       return ls.length ? ls[ls.length - 1].toLowerCase() : "";
@@ -178,7 +223,8 @@ export async function POST(req) {
         results.push({ step, skipped: true });
         continue;
       }
-      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs);
+      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight);
+      if (out.quality && out.quality !== "ok") qualityIssues.push(`E${step}: ${out.quality}`);
       if (out.body !== "GENERATION_FAILED") {
         if (scKey && out.subject) {
           cells[scKey] = out.subject;
@@ -195,7 +241,17 @@ export async function POST(req) {
     const anyEmail = results.some((r) => r.subject && !r.failed);
     // Only rows with a real signal AND clean data are auto-marked Ready; a
     // no-signal draft is generated but flagged so a person decides before send.
-    if (anyEmail) cells["Status"] = review.ready ? "Ready" : `Needs review: ${review.reason}`;
+    if (anyEmail) {
+      // Copy that could not be repaired to pass the banned-phrase, length,
+      // pitch-shape and mirror guards is held even when the targeting was
+      // fine. A held row costs nothing; a shipped row that reads as AI costs
+      // the sending domain.
+      if (qualityIssues.length) {
+        cells["Status"] = `Needs review: ${qualityIssues[0]}`.slice(0, 240);
+      } else {
+        cells["Status"] = review.ready ? "Ready" : `Needs review: ${review.reason}`;
+      }
+    }
 
     await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, cells);
 
@@ -246,6 +302,20 @@ export async function POST(req) {
       results
     });
   } catch (e) {
+    // A thrown error used to return 500 without writing anything, leaving the
+    // row blank: not Ready, not rejected, just invisible. Every row now ends
+    // with a Status, so nothing can silently disappear from a bulk run.
+    try {
+      const body = await req.clone().json().catch(() => ({}));
+      if (body && body.spreadsheetId && body.sheetName && body.rowNumber) {
+        const { headers } = await readSheet(body.spreadsheetId, body.sheetName);
+        const hi = {};
+        headers.forEach((h, i) => { hi[h] = i + 1; });
+        await writeRowCells(body.spreadsheetId, body.sheetName, body.rowNumber, hi, {
+          "Status": `Error: ${String(e.message || e).slice(0, 180)}`
+        });
+      }
+    } catch { /* the original error is what matters */ }
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
