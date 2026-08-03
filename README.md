@@ -110,6 +110,106 @@ the email leads with a specific outside angle on the event and offers to send
 the detail, so a human can attach the real thing. Without a real give, no-signal
 prospects are inherently generic, this column is how you fix that.
 
+
+## The Insight Library: the give that works with zero news
+
+The single biggest failure in the old output was on rows with no news. With
+nothing to anchor on, the engine fell back to the scraped website and handed
+the reader a description of their own company with a compliment on it:
+
+> *"DPC's focus on building evaluation, design, and construction administration
+> positions it as a vital partner for property owners and managers. With decades
+> of experience, your efforts to maintain and restore buildings..."*
+
+Peter wrote that copy. It is a **mirror**, not a give, and no prompt fixes it
+because the *material* is wrong. Google News is free; every competitor with an
+Apollo seat and an API key builds the same email.
+
+Kings Research has trackers, primary interviews and years of segment work.
+**That** is the give. It works in a dead quarter, on a company that has not
+issued a press release in three years, and it cannot be replicated.
+
+So the anchor priority is enforced **in code**, not prompt:
+
+1. **A matched proprietary finding** — works always, primary
+2. A competitor or market move — when one exists
+3. Their own news, outside angle only
+4. Nothing → **hold the row.** A generic email is worse than no email: it burns
+   the domain *and* the prospect.
+
+### The `Insights` tab
+
+Created automatically on first run. Six columns:
+
+| Column | Example |
+|---|---|
+| `Industry` | Building services |
+| `Segment Keywords` | facade restoration; building envelope; FISP; Local Law 11 |
+| `Finding` | Cycle 10 filings show 38% of buildings that filed SWARMP in cycle 9 have moved to Unsafe, against 22% |
+| `Implication` | A lot of owners about to need scope work they have not budgeted for |
+| `Withheld` | The breakdown by borough and building class |
+| `Source Date` | 2026-Q2 |
+
+`insights-template.csv` has worked examples. Aim for 40-60 findings tagged to
+industry and sub-segment; matching is deterministic keyword overlap, and a
+finding is **never** model-generated — a hallucinated statistic sent to a
+senior buyer is unrecoverable, and the whole point is that the number is
+checkable.
+
+A finding is usable only if it passes four tests:
+
+- **Non-obvious** — if they already know it, it is not a give
+- **Uncomfortable** — it should imply they might be a step behind
+- **Checkable** — a specific number or named mechanism; falsifiability is what
+  makes it credible
+- **Incomplete** — the number lands, the breakdown requires a reply. That last
+  one is the entire sales mechanic.
+
+Matching is conservative (`MIN_SCORE = 3`): a wrong finding is worse than no
+finding, because it tells a senior reader you do not actually know their
+segment, which is the one thing you are claiming.
+
+## Guards that run on every generated email
+
+The prompt used to carry all of these and the model treated them as
+suggestions. They are now code, and a failure forces regeneration:
+
+| Guard | Catches |
+|---|---|
+| `bannedHits` | AI tells and report-vendor vocabulary (CAGR, market size, "by 2030", "key players", "navigating", "many firms are") |
+| `lengthProblem` | E1 90 words, E2 50, E3 80, E4 110. Hard, with 15% tolerance |
+| `pitchProblem` | "We can help X with:" capability lists, positioning lines, bullets outside E4 |
+| `mirrorProblem` | The opening being lifted from the prospect's own website copy |
+
+**The fallback was the real bug.** After three failed attempts the old code
+shipped the body unchanged and only repaired the subject, which is why
+"navigating" and "many firms are" kept appearing in sent copy despite being
+banned. The body now gets one targeted repair pass, and if it still fails the
+row is written `Needs review: unfixable: ...` rather than `Ready`.
+
+## The cadence
+
+One subject, four bodies, and the psychology inverted.
+
+**E1 — the finding.** ≤90 words. Number, implication, one-line ask. No bullet
+list, no positioning line, no "Kings Research is a...". The signature carries
+identity; a capability list converts a give into a pitch and the reader stops
+at the colon.
+
+**E2 — a second, different finding.** ≤50 words. Not a bump. "Just floating
+this to the top" spends a touch and gives nothing.
+
+**E3 — narrow to their segment.** ≤80 words. Their actual product line,
+customer type, or geography, with a substantive read on it.
+
+**E4 — give it away.** ≤110 words. Three numbered items, everything you are
+watching in their space, and **no ask at all**: no CTA, no offer, no question
+mark. It is the only email that wants nothing from them, which is exactly why
+it should be the highest-reply touch in the sequence.
+
+Then E5 three weeks later on a new thread with a new finding. A meaningful
+share of replies land there.
+
 ## Only good rows are auto-marked "Ready"
 
 Not every row should be blasted. The pipeline holds the ones that would embarrass
@@ -221,8 +321,18 @@ shift, so map Smartlead against the header names rather than the letters.
 
 `Status` values:
 
-- `Ready` - in the title bracket, a real signal, clean company data. Safe to send.
-- `Not present in JT` - outside the approved title bracket. No emails generated.
+- `Ready` - in the title bracket, a real give (a matched finding or an outside
+  view), clean company data, and copy that passed every guard. Safe to send.
+- `Not present in JT` - wrong function or seniority. Dead.
+- `Needs enrichment: unparseable title` - the title column holds a department
+  ("Aerospace"), a product ("Aras PLM"), a team name ("Airspace Innovation"),
+  or a bare function with no seniority word ("Business Development"). These are
+  **recoverable** and must not be binned with the first kind: Andy Thurling at
+  DroneUp under "Airspace Innovation" is real pipeline. Route to Sales
+  Navigator for a re-enrichment pass.
+- `Error: <message>` - the row threw. Previously these returned a 500 and wrote
+  nothing, leaving the row blank: not Ready, not rejected, just invisible on a
+  5,000-row sheet.
 - `Needs review: <reason>` - drafted but held for a human (no signal found, or
   a domain-as-company / missing company name, which is skipped entirely).
 
