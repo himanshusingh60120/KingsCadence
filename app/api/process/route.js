@@ -3,7 +3,8 @@ import { readSheet, writeRowCells, appendRows, readTabSafe, ensureTab } from "..
 import { companyWebsiteIntel, newsSignals, classifyEvents, deriveCompetitors } from "../../../lib/research";
 import { generateEmail, reviewStatus, sortEvents } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
-import { jobTitleGate, isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/titles";
+import { isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/titles";
+import { judgeRelevance } from "../../../lib/relevance";
 import { parseInsights, matchInsight, INSIGHTS_HEADER } from "../../../lib/insights";
 
 // The Insight Library is read once per warm instance, not once per row: it is
@@ -92,30 +93,11 @@ export async function POST(req) {
       return NextResponse.json({ skipped: true, reason: status });
     }
 
-    // ── JOB TITLE GATE ───────────────────────────────────────────────────
-    // Runs BEFORE anything that costs money. An out-of-bracket row never
-    // scrapes a website, never queries Google News, and never touches the
-    // OpenAI API: it is stamped "Not present in JT" and the row is done.
-    // On a typical purchased list this drops 40-60% of rows, so it is also
-    // the single biggest cost saving in the pipeline.
-    const jt = jobTitleGate(lead);
-    if (!jt.inJT) {
-      // Two different failures, two different statuses. A Marketing Manager is
-      // correctly out of scope and dead. "Airspace Innovation" is a senior
-      // person whose title column holds a team name, and is recoverable with
-      // one enrichment pass, so it must not be binned with the first kind.
-      const enrichable = isUnparseableTitle(lead);
-      await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, {
-        "Status": enrichable ? NEEDS_ENRICHMENT : NOT_IN_JT,
-        "Signal": enrichable
-          ? `title field is not a title ("${lead.title}"), re-enrich from LinkedIn`
-          : `JT filter: ${jt.reason}`
-      });
-      return NextResponse.json({
-        ok: true, notInJT: true, enrichable, reason: jt.reason,
-        title: lead.title || "", seniority: jt.rankLabel, results: []
-      });
-    }
+    // ── RELEVANCE (part 1 of 2): obvious rejects only ────────────────────
+    // The full judgment needs to know what the company DOES, which requires
+    // the site scrape, so it runs after research. Only titles that are never
+    // buyers at any company are rejected here, for free, before any spend.
+    // Everything else, including vague and mislabelled titles, goes through.
 
     // Country -> Timezone (state refines US/Canada/Australia). Independent of
     // email generation: fills even on rows whose emails are already done.
@@ -154,11 +136,33 @@ export async function POST(req) {
       });
     }
 
+    // ── RELEVANCE (part 2 of 2): the actual judgment ─────────────────────
+    // Not "does this title match a pattern" but the question an SDR asks:
+    // would this person, at THIS company, buy or champion market
+    // intelligence? Both are judged. The company check is the one the regex
+    // gate never had, and it is the more important of the two: a CMO at a
+    // school district is still not a buyer, and a regional restoration firm
+    // has no market to analyse at any seniority.
+    const rel = await judgeRelevance(lead, companyIntel);
+    if (!rel.relevant) {
+      const enrichable = isUnparseableTitle(lead);
+      await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, {
+        "Status": enrichable ? NEEDS_ENRICHMENT : NOT_IN_JT,
+        "Signal": enrichable
+          ? `title field is not a title ("${lead.title}"), re-enrich from LinkedIn`
+          : `not relevant: ${rel.reason}`
+      });
+      return NextResponse.json({
+        ok: true, notRelevant: true, verdict: rel.verdict,
+        reason: rel.reason, source: rel.source, results: []
+      });
+    }
+
     // 2) EVENT TYPING: GPT turns noisy headlines into real, typed events, each
     //    with the strategic "angle" it raises, and drops third-party industry
     //    news that has no bearing on what THIS company actually does (judged
     //    against the scraped site description). [] => sector-level fallback.
-    const rawEvents = await classifyEvents(lead.companyName, lead.industry, news, companyIntel.description);
+    const rawEvents = await classifyEvents(lead.companyName, lead.industry, news, companyIntel.description, competitors);
 
     // ── ANCHOR ORDER, ENFORCED IN CODE ───────────────────────────────────
     // Competitor and market events sort to the front. The prompt already said
@@ -184,7 +188,7 @@ export async function POST(req) {
 
     // Decide if this row is safe to auto-send or should be held for a human.
     const review = reviewStatus(lead, events, insight);
-    const cells = { "Signal": signal };
+    const cells = { "Signal": `[${rel.verdict}] ${signal}`.slice(0, 250) };
     // Surface the recovered real company name back in the sheet's company column.
     if (companyNameFixed) cells["company"] = lead.companyName;
 
@@ -206,6 +210,7 @@ export async function POST(req) {
     const usedSubjects = [];
     const usedCTAs = [];
     const qualityIssues = [];
+    const earlierBodies = [];
     const lastLine = (b) => {
       const ls = (b || "").split("\n").map((l) => l.trim()).filter(Boolean);
       return ls.length ? ls[ls.length - 1].toLowerCase() : "";
@@ -218,12 +223,13 @@ export async function POST(req) {
       const scKey = step === 1 ? "E1 Subject" : null;
       const alreadyDone = scKey ? (lead[scKey] && lead[bcKey]) : lead[bcKey];
       if (!force && alreadyDone) {
+        earlierBodies.push(lead[bcKey]);
         const c = lastLine(lead[bcKey]);
         if (c) usedCTAs.push(c);
         results.push({ step, skipped: true });
         continue;
       }
-      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight);
+      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight, earlierBodies);
       if (out.quality && out.quality !== "ok") qualityIssues.push(`E${step}: ${out.quality}`);
       if (out.body !== "GENERATION_FAILED") {
         if (scKey && out.subject) {
@@ -231,6 +237,7 @@ export async function POST(req) {
           usedSubjects.push(out.subject);
         }
         cells[bcKey] = out.body;
+        earlierBodies.push(out.body);
         const c = lastLine(out.body);
         if (c) usedCTAs.push(c);
         results.push({ step, subject: out.subject || "(thread reply)" });
