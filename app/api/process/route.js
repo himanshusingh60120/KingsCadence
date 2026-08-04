@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { readSheet, writeRowCells, appendRows, readTabSafe, ensureTab } from "../../../lib/google";
-import { companyWebsiteIntel, newsSignals, classifyEvents, deriveMarketContext, quarterWindowDays } from "../../../lib/research";
+import { companyWebsiteIntel, newsSignalsWithFallback, classifyEvents, deriveMarketContext, quarterWindowDays } from "../../../lib/research";
 import { generateEmail, reviewStatus, sortEvents } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
 import { isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/titles";
@@ -85,7 +85,7 @@ async function scrapeIntel(lead) {
 
 async function gatherNews(lead, marketCtx, thesis, competitors) {
   const cacheKey = (lead.companyWebsite || lead.companyName || "").toLowerCase().trim();
-  const run = () => newsSignals(lead.companyName, lead.industry, {
+  const run = () => newsSignalsWithFallback(lead.companyName, lead.industry, {
     domain: lead.companyWebsite,
     headCount: lead.companyHeadCount,
     revenue: lead.companyRevenue,
