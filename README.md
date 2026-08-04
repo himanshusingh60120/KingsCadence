@@ -291,6 +291,57 @@ Stale beats nothing is false in this business. A cold email is only credible if
 the event is live: sending a two-year-old headline tells the reader you are not
 actually watching their market, which is the one thing you are selling.
 
+## Why every email looked the same
+
+Twenty rows came back with the same shape:
+
+- every E1 opened on a rival's name — Wing did X, Northrop did Y, Pentagon did Z
+- every subject was `[Rival]'s [move] + your [thing]`
+- every E1 carried **"We track your sector pricing quarterly. Three things we can see that you probably cannot from inside:"** — verbatim, to an insurer, a radar firm and a drone operator alike
+- every E4 opened **"I'm not chasing a reply, just sharing what we're tracking"**
+
+Two causes, and both were mine.
+
+**Prompt examples become templates.** Every one of those stock lines was
+written into this repo's prompts as an *illustration*. Models copy example
+sentences word for word. A quotable line in a prompt is a template, not an
+example — the prompts now describe the *move* and let the model write the
+sentence. All the seeded phrases are on the banned list, so they cannot come
+back.
+
+**Each guard narrowed the space.** "Must open on the give", "must name an
+outside actor", "must have three bullets" — individually reasonable, together
+they left exactly one survivable shape. Twenty emails from one mould read as
+bulk mail whatever the words are.
+
+And under both, a deeper error: **anchoring on the rival's move.** A competitor
+move is a fact, and a fact plus a guess about its effect is not substance.
+What earns a reply is what that fact does to a decision the reader owns.
+
+## Angle rotation
+
+`lib/angles.js` assigns each prospect one of five entry angles, hashed from
+their email so it is stable on re-run but spread across a list:
+
+| Angle | Opens on |
+|---|---|
+| `DECISION` | a call they own that just got harder |
+| `STRUCTURAL` | how their market actually works — a mechanism they may not have connected |
+| `BUYER` | what is changing in what their customers need or budget |
+| `RIVAL` | a competitor move — but the move is only the setup |
+| `REGULATORY` | a rule, followed one step past the obvious |
+
+Availability constrains it: `RIVAL` needs a competitor event, `REGULATORY`
+needs a regulatory one. `STRUCTURAL` always works, because it is a read rather
+than a headline — which is what lets a row with no news still say something.
+
+Across the nine leads in the last run: `STRUCTURAL` 3, `DECISION` 2,
+`REGULATORY` 2, `RIVAL` 1, `BUYER` 1. Rival openings went from nine of nine to
+one of nine.
+
+Subject shapes (six) and E4 closing moves (five) rotate the same way, and both
+are described rather than quoted so no stock sentence can propagate.
+
 ## The engagement thesis — the layer that was missing
 
 The pipeline went **news → email**. Every bullet therefore had to be invented
