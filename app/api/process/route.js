@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { readSheet, writeRowCells, appendRows, readTabSafe, ensureTab } from "../../../lib/google";
-import { companyWebsiteIntel, newsSignals, classifyEvents, deriveCompetitors } from "../../../lib/research";
+import { companyWebsiteIntel, newsSignals, classifyEvents, deriveMarketContext } from "../../../lib/research";
 import { generateEmail, reviewStatus, sortEvents } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
 import { isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/titles";
