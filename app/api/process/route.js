@@ -62,20 +62,26 @@ async function research(lead) {
   const run = async () => {
     const companyIntel = await companyWebsiteIntel(lead.companyWebsite);
     let competitors = sheetCompetitors(lead);
+    // One call returns competitors, the work-domain search terms, and a line
+    // on who the company sells to. Domain terms matter more than competitors
+    // here: the sector label on a purchased list is usually too broad, and
+    // searching it returns news from the wrong market entirely.
+    let marketCtx = await deriveMarketContext(lead.companyName, lead.industry, companyIntel.description);
     if (!competitors.length) {
-      competitors = await deriveCompetitors(lead.companyName, lead.industry, companyIntel.description);
+      competitors = marketCtx.competitors;
     }
     const news = await newsSignals(lead.companyName, lead.industry, {
       domain: lead.companyWebsite,
       headCount: lead.companyHeadCount,
       revenue: lead.companyRevenue,
       subIndustry: lead.subIndustry,
-      competitors
+      competitors,
+      domainQueries: marketCtx.domainQueries
     });
-    return [companyIntel, news, competitors];
+    return [companyIntel, news, competitors, marketCtx];
   };
-  const [companyIntel, news, competitors] = cacheKey ? await getCachedResearch(cacheKey, run) : await run();
-  return { companyIntel, news, competitors };
+  const [companyIntel, news, competitors, marketCtx] = cacheKey ? await getCachedResearch(cacheKey, run) : await run();
+  return { companyIntel, news, competitors, marketCtx };
 }
 
 export async function POST(req) {
@@ -117,7 +123,7 @@ export async function POST(req) {
 
     // 1) SCREENING: live company research (its website + fresh news covering
     //    M&A, capacity, closures, launches, partnerships, regulation, ...).
-    let { companyIntel, news, competitors } = await research(lead);
+    let { companyIntel, news, competitors, marketCtx } = await research(lead);
 
     // If the company column was a bare domain (or empty), recover the real
     // company name by crawling the site, then re-run the news search with the
@@ -132,7 +138,8 @@ export async function POST(req) {
         headCount: lead.companyHeadCount,
         revenue: lead.companyRevenue,
         subIndustry: lead.subIndustry,
-        competitors
+        competitors,
+        domainQueries: marketCtx.domainQueries
       });
     }
 
@@ -143,6 +150,11 @@ export async function POST(req) {
     // gate never had, and it is the more important of the two: a CMO at a
     // school district is still not a buyer, and a regional restoration firm
     // has no market to analyse at any seniority.
+    // marketCtx already carries what they sell, their segments and their real
+    // rivals. Attaching it to the lead is what lets the bullet guard check
+    // that each bullet names something from THIS prospect's world.
+    lead.__profile = marketCtx;
+
     const rel = await judgeRelevance(lead, companyIntel);
     if (!rel.relevant) {
       const enrichable = isUnparseableTitle(lead);
@@ -162,7 +174,7 @@ export async function POST(req) {
     //    with the strategic "angle" it raises, and drops third-party industry
     //    news that has no bearing on what THIS company actually does (judged
     //    against the scraped site description). [] => sector-level fallback.
-    const rawEvents = await classifyEvents(lead.companyName, lead.industry, news, companyIntel.description, competitors);
+    const rawEvents = await classifyEvents(lead.companyName, lead.industry, news, companyIntel.description, competitors, marketCtx);
 
     // ── ANCHOR ORDER, ENFORCED IN CODE ───────────────────────────────────
     // Competitor and market events sort to the front. The prompt already said
@@ -229,7 +241,7 @@ export async function POST(req) {
         results.push({ step, skipped: true });
         continue;
       }
-      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight, earlierBodies);
+      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight, earlierBodies, marketCtx.buyerWorld);
       if (out.quality && out.quality !== "ok") qualityIssues.push(`E${step}: ${out.quality}`);
       if (out.body !== "GENERATION_FAILED") {
         if (scKey && out.subject) {
