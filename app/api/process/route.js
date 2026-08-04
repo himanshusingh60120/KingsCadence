@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { readSheet, writeRowCells, appendRows, readTabSafe, ensureTab } from "../../../lib/google";
-import { companyWebsiteIntel, newsSignals, classifyEvents, deriveMarketContext } from "../../../lib/research";
+import { companyWebsiteIntel, newsSignals, classifyEvents, deriveMarketContext, quarterWindowDays } from "../../../lib/research";
 import { generateEmail, reviewStatus, sortEvents } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
 import { isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/titles";
@@ -27,7 +27,7 @@ async function loadInsights(spreadsheetId) {
   return value;
 }
 
-export const maxDuration = 60;
+export const maxDuration = 300; // was 60; a full row exceeded it (see README)
 
 // Per-instance cache: on Vercel a warm serverless instance is often reused
 // across consecutive invocations (e.g. a bulk run processing many rows back
@@ -58,32 +58,44 @@ function sheetCompetitors(lead) {
     .map((name) => ({ name, why: "" }));
 }
 
-async function research(lead) {
+/**
+ * ORDERING MATTERS AND IT WAS WRONG.
+ *
+ * research() read `lead.__thesis` for its watch queries, but the thesis was
+ * not built until 100 lines later in POST. Those queries were therefore ALWAYS
+ * empty and the thesis never influenced the news search at all.
+ *
+ * The correct order, which is also the cheapest:
+ *
+ *   1. scrape          once, cached per company
+ *   2. relevance gate  cheap, and rejects ~40% of rows before any spend
+ *   3. marketCtx + thesis   IN PARALLEL: both depend only on the scrape
+ *   4. news            needs the queries from both of the above
+ *
+ * Steps 3's two calls used to run sequentially at opposite ends of the
+ * function. Running them together removes roughly 8-12 seconds per row, which
+ * matters because a full row was hitting the 60s function ceiling and
+ * returning Vercel's HTML error page to a client that expected JSON.
+ */
+async function scrapeIntel(lead) {
   const cacheKey = (lead.companyWebsite || lead.companyName || "").toLowerCase().trim();
-  const run = async () => {
-    const companyIntel = await companyWebsiteIntel(lead.companyWebsite);
-    let competitors = sheetCompetitors(lead);
-    // One call returns competitors, the work-domain search terms, and a line
-    // on who the company sells to. Domain terms matter more than competitors
-    // here: the sector label on a purchased list is usually too broad, and
-    // searching it returns news from the wrong market entirely.
-    let marketCtx = await deriveMarketContext(lead.companyName, lead.industry, companyIntel.description);
-    if (!competitors.length) {
-      competitors = marketCtx.competitors;
-    }
-    const news = await newsSignals(lead.companyName, lead.industry, {
-      domain: lead.companyWebsite,
-      headCount: lead.companyHeadCount,
-      revenue: lead.companyRevenue,
-      subIndustry: lead.subIndustry,
-      competitors,
-      domainQueries: marketCtx.domainQueries,
-      watchQueries: (lead.__thesis && lead.__thesis.watchQueries) || []
-    });
-    return [companyIntel, news, competitors, marketCtx];
-  };
-  const [companyIntel, news, competitors, marketCtx] = cacheKey ? await getCachedResearch(cacheKey, run) : await run();
-  return { companyIntel, news, competitors, marketCtx };
+  const run = () => companyWebsiteIntel(lead.companyWebsite);
+  return cacheKey ? getCachedResearch(`intel:${cacheKey}`, run) : run();
+}
+
+async function gatherNews(lead, marketCtx, thesis, competitors) {
+  const cacheKey = (lead.companyWebsite || lead.companyName || "").toLowerCase().trim();
+  const run = () => newsSignals(lead.companyName, lead.industry, {
+    domain: lead.companyWebsite,
+    headCount: lead.companyHeadCount,
+    revenue: lead.companyRevenue,
+    subIndustry: lead.subIndustry,
+    competitors,
+    domainQueries: marketCtx.domainQueries,
+    // Now actually populated: the thesis is built before this runs.
+    watchQueries: (thesis && thesis.watchQueries) || []
+  });
+  return cacheKey ? getCachedResearch(`news:${cacheKey}`, run) : run();
 }
 
 export async function POST(req) {
@@ -92,6 +104,11 @@ export async function POST(req) {
   // body stream was already consumed by req.json() here, so the catch failed
   // silently and the row was left completely blank: no emails, no status, no
   // error. Three rows vanished that way in the last run.
+  // Wall clock for this invocation. Generation checks it so a row finishes and
+  // writes a Status instead of being killed mid-flight, which leaves the sheet
+  // row blank and tells the operator nothing.
+  const deadline = Date.now() + (maxDuration - 25) * 1000;
+
   let reqBody = {};
   try {
     reqBody = await req.json();
@@ -134,56 +151,27 @@ export async function POST(req) {
       return NextResponse.json({ skipped: true, reason: "no email" });
     }
 
-    // 1) SCREENING: live company research (its website + fresh news covering
-    //    M&A, capacity, closures, launches, partnerships, regulation, ...).
-    let { companyIntel, news, competitors, marketCtx } = await research(lead);
+    // ── 1) SCRAPE ────────────────────────────────────────────────────────
+    const companyIntel = await scrapeIntel(lead);
 
-    // If the company column was a bare domain (or empty), recover the real
-    // company name by crawling the site, then re-run the news search with the
-    // real name so the row gets proper signal instead of being skipped.
+    // Recover a real company name if the column held a bare domain, BEFORE
+    // anything downstream uses it. Previously this ran after the news search
+    // and forced a second full search.
     const looksDomain = (c) => !!c && !c.includes(" ") && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(c);
     let companyNameFixed = false;
     if ((!lead.companyName || looksDomain(lead.companyName)) && companyIntel.companyName) {
       lead.companyName = companyIntel.companyName;
       companyNameFixed = true;
-      news = await newsSignals(lead.companyName, lead.industry, {
-        domain: lead.companyWebsite,
-        headCount: lead.companyHeadCount,
-        revenue: lead.companyRevenue,
-        subIndustry: lead.subIndustry,
-        competitors,
-        domainQueries: marketCtx.domainQueries
-      });
     }
 
-    // ── RELEVANCE (part 2 of 2): the actual judgment ─────────────────────
-    // Not "does this title match a pattern" but the question an SDR asks:
-    // would this person, at THIS company, buy or champion market
-    // intelligence? Both are judged. The company check is the one the regex
-    // gate never had, and it is the more important of the two: a CMO at a
-    // school district is still not a buyer, and a regional restoration firm
-    // has no market to analyse at any seniority.
-    // marketCtx already carries what they sell, their segments and their real
-    // rivals. Attaching it to the lead is what lets the bullet guard check
-    // that each bullet names something from THIS prospect's world.
-    lead.__profile = marketCtx;
-
-    // ── ENGAGEMENT THESIS ────────────────────────────────────────────────
-    // What are they really, what decisions does their leadership own, and
-    // what could Kings Research actually sell them. Built once per company.
-    // Email 1's bullets are drawn from its deliverables list rather than
-    // invented from a headline, which is what stops them coming out as
-    // speculations ("how many partnerships MAY shift...").
-    const thesis = await engagementThesis(lead, companyIntel);
-    if (thesis) {
-      lead.__thesis = thesis;
-      lead.__profile = {
-        ...marketCtx,
-        segments: thesis.segments.length ? thesis.segments : marketCtx.segments,
-        rivals: thesis.rivals.length ? thesis.rivals : marketCtx.rivals
-      };
-    }
-
+    // ── 2) RELEVANCE GATE ────────────────────────────────────────────────
+    // Runs BEFORE the two expensive derivation calls and before the news
+    // search. It rejects roughly 40% of a purchased list, and every one of
+    // those rows now costs one small call instead of four large ones.
+    //
+    // The question is the one an SDR asks: would this person, at THIS
+    // company, buy or champion market intelligence? The company half of that
+    // matters more than the title half.
     const rel = await judgeRelevance(lead, companyIntel);
     if (!rel.relevant) {
       const enrichable = isUnparseableTitle(lead);
@@ -198,6 +186,36 @@ export async function POST(req) {
         reason: rel.reason, source: rel.source, results: []
       });
     }
+
+    // ── 3) MARKET CONTEXT + ENGAGEMENT THESIS, IN PARALLEL ───────────────
+    // Both depend only on the scrape, and they used to run sequentially at
+    // opposite ends of this function. Together they are the difference
+    // between finishing inside the function limit and returning an HTML
+    // error page to a client expecting JSON.
+    const [marketCtx, thesis] = await Promise.all([
+      deriveMarketContext(lead.companyName, lead.industry, companyIntel.description),
+      engagementThesis(lead, companyIntel)
+    ]);
+
+    let competitors = sheetCompetitors(lead);
+    if (!competitors.length) competitors = marketCtx.competitors;
+
+    lead.__profile = marketCtx;
+    if (thesis) {
+      lead.__thesis = thesis;
+      lead.__profile = {
+        ...marketCtx,
+        segments: thesis.segments.length ? thesis.segments : marketCtx.segments,
+        rivals: thesis.rivals.length ? thesis.rivals : marketCtx.rivals
+      };
+    }
+
+    // ── 4) NEWS ──────────────────────────────────────────────────────────
+    // Now genuinely receives the thesis watch queries, which it never did.
+    const news = await gatherNews(lead, marketCtx, thesis, competitors);
+    // The window the news filter actually used, so the date guard knows what
+    // could legitimately have come back.
+    lead.__maxAgeDays = quarterWindowDays();
 
     // 2) EVENT TYPING: GPT turns noisy headlines into real, typed events, each
     //    with the strategic "angle" it raises, and drops third-party industry
@@ -270,7 +288,11 @@ export async function POST(req) {
         results.push({ step, skipped: true });
         continue;
       }
-      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight, earlierBodies, thesis ? thesis.whoPaysThem : marketCtx.buyerWorld, thesis);
+      if (Date.now() > deadline - 15000) {
+        results.push({ step, failed: true, reason: "out of time" });
+        continue;
+      }
+      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight, earlierBodies, thesis ? thesis.whoPaysThem : marketCtx.buyerWorld, thesis, deadline);
       if (out.quality && out.quality !== "ok") qualityIssues.push(`E${step}: ${out.quality}`);
       if (out.body !== "GENERATION_FAILED") {
         if (scKey && out.subject) {
@@ -300,8 +322,16 @@ export async function POST(req) {
       // email to someone who cannot act on it still costs send volume and
       // domain reputation.
       const seatReady = meetsReadyBar(rel);
-      if (qualityIssues.length) {
-        cells["Status"] = `Needs review: ${qualityIssues[0]}`.slice(0, 240);
+      // Soft phrasing no longer holds a row: it is recorded in Signal so
+      // patterns stay visible, but the row ships. A status column that always
+      // reads "needs review" gets ignored and then bulk-approved, which is
+      // worse than sending an email with one hedge left in it.
+      const blocking = qualityIssues.filter((q) => !/weak phrasing/i.test(q));
+      if (qualityIssues.length && !blocking.length) {
+        cells["Signal"] = `${cells["Signal"]} | soft: ${qualityIssues[0].replace(/^E\d: unfixable: /, "")}`.slice(0, 250);
+      }
+      if (blocking.length) {
+        cells["Status"] = `Needs review: ${blocking[0]}`.slice(0, 240);
       } else if (!review.ready) {
         cells["Status"] = `Needs review: ${review.reason}`;
       } else if (!seatReady) {
