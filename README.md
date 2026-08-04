@@ -291,6 +291,50 @@ Stale beats nothing is false in this business. A cold email is only credible if
 the event is live: sending a two-year-old headline tells the reader you are not
 actually watching their market, which is the one thing you are selling.
 
+## The engagement thesis — the layer that was missing
+
+The pipeline went **news → email**. Every bullet therefore had to be invented
+on the spot from a headline, and what came out were guesses wearing the costume
+of deliverables:
+
+> - how many Walmart partnerships may shift to Wing as they enter Florida
+> - what impact Wing's pricing strategies might have on your cost structure
+> - how quickly Florida regulators may adapt to increased competition
+
+Nobody can buy any of those. And the hedging is not a style problem — it is the
+honest consequence of asking a model to invent a deliverable from a headline.
+Banning "may" without fixing the input just produced held rows.
+
+`lib/thesis.js` inserts the sequence a human consultant actually uses:
+
+```
+WHAT ARE THEY  →  WHAT DECISIONS DO THEY OWN  →  WHAT COULD WE SELL THEM
+               →  which news hooks into that  →  write
+```
+
+It runs once per company and produces:
+
+| Field | What it is |
+|---|---|
+| `whatTheyAre` | corrects the list's industry label — "Global Aerospace" is an aviation **insurer**, not a manufacturer |
+| `whoPaysThem` | the customer types who sign cheques |
+| `segments` / `rivals` | their real coverage classes and their real named competitors |
+| `decisions` | the recurring high-stakes calls their leadership owns |
+| `deliverables` | **6-8 named, buyable Kings Research products for this company** |
+| `watchQueries` | news searches anchored to those decisions |
+
+**Email 1's bullets are drawn from `deliverables`, not invented.** That single
+change is what removes the speculation at source:
+
+> - Quarterly competitor tracking on Allianz, AIG Aerospace and AXA XL: product launches, pricing moves, geographic expansion
+> - Fleet expansion tracker: which carriers are adding aircraft, by region and type
+> - Insurance implications of eVTOL and advanced air mobility, with adoption forecasts by aircraft class
+
+Each is a **noun they can buy**. Deliverables containing `may`, `might`,
+`could`, or `potential` are filtered out of the thesis before they can reach a
+bullet, and `bulletProblem()` rejects any bullet that is a speculation or is
+phrased as a question.
+
 ## The bullets: back, and checked
 
 Stripping them was an overcorrection. The bullets give Email 1 substance, tell
