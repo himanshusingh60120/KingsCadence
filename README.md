@@ -228,6 +228,96 @@ shipped the body unchanged and only repaired the subject, which is why
 banned. The body now gets one targeted repair pass, and if it still fails the
 row is written `Needs review: unfixable: ...` rather than `Ready`.
 
+## Recency: the current quarter, hard-enforced
+
+`when:Nd` in a Google News query is a **hint**, and Google routinely ignores it
+for entity queries, returning the canonical story about a company regardless of
+age. `pubDate` was being parsed and then discarded, which is exactly how a 2023
+AirMap shutdown reached a 2026 email.
+
+Two fixes:
+
+**`quarterWindowDays()`** — the current quarter, and if the quarter has only
+just started, 8 weeks back into the previous one so a January or July run is
+not working from three headlines:
+
+| Run date | Days into quarter | Window |
+|---|---|---|
+| 4 Aug | 34 | 34 days (current quarter) |
+| 5 Jul | 4 | 60 days (reaches into Q2) |
+| 2 Apr | 1 | 57 days |
+| 25 Sep | 86 | 86 days |
+
+Company size may only **narrow** this window, never widen it past the quarter.
+
+**`withinWindow()`** — a hard filter at ingestion. Anything outside the window
+is dropped before the classifier sees it, and **an item with no parseable date
+is dropped too**. Items are then sorted freshest-first inside each scope quota.
+
+Stale beats nothing is false in this business. A cold email is only credible if
+the event is live: sending a two-year-old headline tells the reader you are not
+actually watching their market, which is the one thing you are selling.
+
+## Saying who you are: provenance, not a menu
+
+Removing the capability list entirely was an overcorrection. A stranger's
+insight *does* need provenance — the reader has to know why you of all people
+are telling them this. But there is a right and a wrong way:
+
+**Wrong — a menu.** Generic service categories, interchangeable between every
+prospect in the sector. The reader stops at the colon:
+
+> Kings Research is a market-intelligence and advisory firm that works across
+> your sector. We can help DroneUp with:
+> - Analyzing how X positions you against emerging competitors
+> - Mapping competitor moves
+
+**Right — a provenance line.** One sentence saying *how you know* the thing you
+just said:
+
+> We track the UTM vendor landscape quarterly, which is where that pattern
+> comes from.
+
+A fifth of the words, and it proves an ongoing data capability instead of
+claiming a service. Placement matters: **after** the give, never before, because
+opening with who you are wastes the two lines a phone shows.
+
+Where each email stands:
+
+| Email | Self-introduction allowed |
+|---|---|
+| E1 | one provenance line, after the give |
+| E2 | none — it is a reply on a thread |
+| E3 | **two concrete deliverables**, tied to the named segment |
+| E4 | none |
+
+E3 is where a real offer earns its place, because by then you have given twice.
+The two items must be phrased as what they would *receive* ("who is winning
+your renewals in that segment and on what terms"), not as service categories
+("competitive positioning analysis").
+
+## Never tell them good news about themselves
+
+> "AirMap shutting down will create an opening for DroneUp to capture market
+> share in airspace management services."
+
+That is flattery wearing analysis as a costume. It is pleasant, unfalsifiable,
+and produces no reply, because nothing is at stake. It is the mirror problem in
+a new outfit: instead of describing their business back to them, it predicts
+their success back to them.
+
+The implication line must carry a **risk, an uncertainty, or a question they
+have not asked**. Same fact, stronger:
+
+> AirMap's users do not automatically become yours. In the two prior UTM exits
+> we tracked, most displaced accounts went to the incumbent's partner network
+> rather than the nearest competitor.
+
+Uncomfortable, specific, checkable — and that is why someone replies. The
+flattery vocabulary is banned in code: `create an opening for`, `positioned to
+benefit`, `stands to gain`, `capture market share`, `strengthen your market
+position`, `less competition`.
+
 ## The cadence
 
 One subject, four bodies, and the psychology inverted.
