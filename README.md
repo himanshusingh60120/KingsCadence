@@ -228,6 +228,39 @@ shipped the body unchanged and only repaired the subject, which is why
 banned. The body now gets one targeted repair pass, and if it still fails the
 row is written `Needs review: unfixable: ...` rather than `Ready`.
 
+## The bug behind the irrelevant news
+
+`deriveMarketContext` has been producing `domainQueries` — search phrases for
+the market a company **sells into** — since before any of these changes.
+`newsSignals` destructured that field and then **never issued a single search
+with it**. The only queries that ever ran were on the company's name and its
+competitors' names.
+
+That is the whole reason an aviation insurer was fed its own press release
+about in-orbit servicing. "Global Aerospace" the search string returns Global
+Aerospace's PR. What moves their business is aviation insurance rates, hull
+loss claims, UAS underwriting and reinsurance capacity — none of which
+contains the words "Global Aerospace".
+
+Now wired, with the largest quota of the classifier window:
+
+| Scope | Quota | What it searches |
+|---|---|---|
+| `domain` | 6 | the market they sell into |
+| `competitor` | 5 | named rivals |
+| `company` | 3 | their own news |
+| `industry` | 2 | sector-wide |
+| `own-site` | 1 | their press page |
+
+Two supporting changes: any domain query containing the company's own name is
+dropped (it returns their PR, defeating the point), and every event must now
+carry an `affects` field naming the concrete thing that changes for **this**
+company — a price, a renewal, a buyer's budget, a compliance cost. **An event
+with no concrete consequence is dropped at source.** That is what stops the
+hedging, far more than banning the hedge words: the model wrote "this may
+influence future product development" because it had been handed an event with
+no consequence and asked to find one.
+
 ## Recency: the current quarter, hard-enforced
 
 `when:Nd` in a Google News query is a **hint**, and Google routinely ignores it
@@ -257,6 +290,53 @@ is dropped too**. Items are then sorted freshest-first inside each scope quota.
 Stale beats nothing is false in this business. A cold email is only credible if
 the event is live: sending a two-year-old headline tells the reader you are not
 actually watching their market, which is the one thing you are selling.
+
+## The bullets: back, and checked
+
+Stripping them was an overcorrection. The bullets give Email 1 substance, tell
+the reader what kind of thinking they would get, and break up the wall. The
+problem was never the bullets. It was **interchangeable** bullets.
+
+Dead — would read identically for every insurer on the list:
+
+> - Insights on how competitors are adjusting their pricing in response to market shifts
+> - Analysis of emerging technologies in aviation and their impact on insurance needs
+> - Evaluation of market share trends among key players in aerospace insurance
+
+Alive — only makes sense for one prospect:
+
+> - Which of your last-mile delivery accounts sit inside Wing's announced Florida service radius
+> - What Walmart's partner actually failed on, cost line by cost line
+> - Where AeroVironment's public safety UAS pricing has moved since March
+
+`bulletProblem()` enforces the difference: a bullet is rejected if it opens
+with an abstract service noun (`Insights on`, `Analysis of`, `Evaluation of`),
+ends in filler (`market shifts`, `key players`, `the competitive landscape`),
+or contains no real name, number, or named segment from the prospect's own
+world. The segment and rival lists from `deriveMarketContext` feed the anchor
+check, so "the UAS underwriting book" passes and "the competitive landscape"
+does not.
+
+## Subject lines that get opened
+
+A subject naming only the reader's own news is their press release read back to
+them, and a number does not rescue it:
+
+```
+DEAD   "Global Aerospace's in-orbit servicing technologies"
+DEAD   "Echodyne's new $40M manufacturing hub"
+DEAD   "DJI's eVTOL cargo drone launch"
+DEAD   "energy project delivery insights"
+
+OPENS  "Wing's Florida move + your renewals"
+OPENS  "Northrop's $3B and radar pricing"
+OPENS  "SeAH's US hub, your hull book"
+```
+
+The shape that works: **[the specific outside move] + [what it touches for
+them]**. First half is what happened, second half is why they should care. 4-8
+words, sentence case, under 48 characters, and at least one proper noun that is
+**not** the prospect's own company.
 
 ## Saying who you are: provenance, not a menu
 
