@@ -4,7 +4,7 @@ import { companyWebsiteIntel, newsSignals, classifyEvents, deriveMarketContext }
 import { generateEmail, reviewStatus, sortEvents } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
 import { isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/titles";
-import { judgeRelevance } from "../../../lib/relevance";
+import { judgeRelevance, meetsReadyBar } from "../../../lib/relevance";
 import { parseInsights, matchInsight, INSIGHTS_HEADER } from "../../../lib/insights";
 import { engagementThesis } from "../../../lib/thesis";
 
@@ -229,7 +229,7 @@ export async function POST(req) {
 
     // Decide if this row is safe to auto-send or should be held for a human.
     const review = reviewStatus(lead, events, insight);
-    const cells = { "Signal": `[${rel.verdict}] ${signal}`.slice(0, 250) };
+    const cells = { "Signal": `[${rel.verdict} ${rel.buyLikelihood || 0}%${rel.decisionInfluence ? " decider" : ""}] ${signal}`.slice(0, 250) };
     // Surface the recovered real company name back in the sheet's company column.
     if (companyNameFixed) cells["company"] = lead.companyName;
 
@@ -294,10 +294,20 @@ export async function POST(req) {
       // pitch-shape and mirror guards is held even when the targeting was
       // fine. A held row costs nothing; a shipped row that reads as AI costs
       // the sending domain.
+      // THE READY BAR. Three things must all hold: the copy passed every
+      // guard, the row has a real give, AND the seat would actually buy
+      // (80%+) or can put a proposal in front of whoever signs. A flawless
+      // email to someone who cannot act on it still costs send volume and
+      // domain reputation.
+      const seatReady = meetsReadyBar(rel);
       if (qualityIssues.length) {
         cells["Status"] = `Needs review: ${qualityIssues[0]}`.slice(0, 240);
+      } else if (!review.ready) {
+        cells["Status"] = `Needs review: ${review.reason}`;
+      } else if (!seatReady) {
+        cells["Status"] = `Needs review: seat unlikely to buy (${rel.buyLikelihood || 0}%, no decision influence)`;
       } else {
-        cells["Status"] = review.ready ? "Ready" : `Needs review: ${review.reason}`;
+        cells["Status"] = "Ready";
       }
     }
 
