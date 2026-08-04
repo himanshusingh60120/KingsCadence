@@ -291,6 +291,165 @@ Stale beats nothing is false in this business. A cold email is only credible if
 the event is live: sending a two-year-old headline tells the reader you are not
 actually watching their market, which is the one thing you are selling.
 
+## Three bugs that kept rows out of Ready
+
+Every held row said `Needs review: E1: unfixable: banned`. The guard was firing
+correctly and the repair was failing, so nothing reached `Ready`. Three
+separate causes.
+
+**1. Literal bans could not hold a phrasing.**
+`"we track your sector pricing quarterly"` was banned. What shipped instead:
+
+> We track UAS developments quarterly. Here's what we can provide:
+> We track defense spending trends quarterly. We can provide:
+
+The model just varied the noun. Bans are now **patterns**, not strings —
+`/we (track|monitor|watch)\b[^.]{0,50}\b(quarterly|monthly|closely)/` and eight
+more covering "here are three things", "the timing is yours", "I'm not
+chasing", "you can explore more". All of them were seeded by this repo's own
+prompt examples, and all of them frame Kings Research as a monitoring
+subscription rather than a consultancy.
+
+**2. The date rule caused invented dates.**
+
+> AeroVironment's recent partnership with Applied Intuition, announced on
+> **October 12, 2023**
+
+Sent in August 2026. This was my own rule backfiring: "the fact must be
+checkable, name WHEN" meant that when the research returned no date, the model
+produced a plausible one. An invented date is worse than none, because the
+reader *can* check it — and the moment one detail is wrong, every other claim
+in the email becomes suspect.
+
+`dateProblem()` now rejects any year older than last year, any future year, and
+any day-level date that does not match what the research actually returned. The
+prompt was rewritten to prefer relative time ("last month", "this quarter")
+unless the material carries an exact date.
+
+**3. Subjects were topic labels.**
+
+```
+DEAD   "New competitor in Florida UAS market"
+DEAD   "renewable energy project funding"
+DEAD   "defense contractors' shifting priorities"
+DEAD   "your next customer conversations"
+```
+
+Every one is a noun phrase naming a subject area. It asserts nothing and counts
+nothing, so there is no reason to open it — it reads like a filing label.
+
+A subject must now contain **a number, a verb, or a contrast**. Note that
+"your" deliberately does not count on its own: a possessive pronoun in front of
+an abstraction does not make the abstraction concrete, which is why "your next
+customer conversations" still fails.
+
+```
+OPENS  "orlando has a second bidder"      verb
+OPENS  "18 months of award criteria"      number
+OPENS  "seeker vs perimeter tracks"       contrast
+OPENS  "autonomy is scoring now"          verb + tension
+OPENS  "the thaad number tripled"         verb
+OPENS  "your q3 recompetes"               number
+```
+
+## Why nothing reached "Ready"
+
+Status after a run was `Needs review: E1: unfixable: banned` on almost every
+row. Two separate faults.
+
+**A ban removes an option without supplying one.** "We track your sector
+pricing quarterly. Here are three concrete insights:" kept coming back even
+after it was banned outright, because the prompt asked for a lead-in and gave
+the model nowhere else to go. `LEAD_INS` in `lib/angles.js` supplies six
+rotating **stances** (never sentences, so nothing can propagate verbatim):
+where you would start, what a team in their position needs settled first, what
+the first month would answer, and so on. Assigned per prospect by hash.
+
+**The repair pass was too broad.** It received a list of abstract complaints
+and rewrote widely, often reintroducing the same phrase. A **surgical pass**
+now runs first and does one job: it names the exact banned strings and asks for
+the same idea in different words, keeping every fact, number and name. Only if
+that fails does the general repair run.
+
+And the status now names the actual problem: `unfixable: stock phrase "we track
+your sector pricing quarterly"` instead of `unfixable: banned`, which told the
+operator nothing.
+
+Note the seat gate was **not** the blocker: `[influencer 60% decider]` passes
+`meetsReadyBar` on `decisionInfluence`. It was always the copy guards.
+
+## Subject lines, professional register
+
+The all-lowercase "internal note" style was wrong for this business. Kings
+Research is an advisory firm writing to executives; a lowercase fragment from
+an unknown sender reads as careless, not as a peer.
+
+**Sentence case** — first letter capitalised, proper nouns capitalised, nothing
+else. Not all-lowercase (sloppy), not Title Case (a headline, and headlines are
+marketing). 4-8 words, under 55 characters, clean grammar.
+
+Two overlapping topic-label checks had drifted apart and disagreed: one held a
+verb list without gerunds, so `"Autonomy scoring in defense UAS awards"` — a
+perfectly good subject — was rejected. Consolidated into one check that accepts
+a number, a verb in **any** form including gerunds, a tension marker, or a named
+entity.
+
+```
+OPENS  "Autonomy scoring in defense UAS awards"
+OPENS  "Patriot output tripled, radar knock-on"
+OPENS  "Florida just added a second drone bidder"
+OPENS  "Is autonomy scored in your recompetes?"
+OPENS  "FISP cycle 10 conversion rates"
+OPENS  "Applied Intuition signed to Mayhem-10"
+
+DEAD   "your next customer conversations"          lowercase, and abstract
+DEAD   "renewable energy project funding"          topic label
+DEAD   "Northrop's $3B contract and your pricing"  joiner formula
+DEAD   "Wing opened Orlando last month"            opens on a stranger
+```
+
+## Timeouts, and the pipeline order
+
+A row died at exactly 60 seconds with `Unexpected token 'A', "An error o"... is
+not valid JSON`. That is not a code bug in the usual sense: the function hit
+its ceiling, Vercel returned its HTML error page, and the client called
+`.json()` on it.
+
+Three fixes.
+
+**The client now reports what happened.** `page.jsx` reads the response as text
+first and only then parses, so a timeout says *"server timed out on this row
+(504)"* rather than a parser error that points nowhere.
+
+**`maxDuration` raised 60 → 300**, in both `vercel.json` and the route. Note
+this requires a Vercel plan that permits it; Hobby caps at 60.
+
+**The order was wrong, and expensively so.** `research()` read
+`lead.__thesis` for its news watch queries, but the thesis was not built until
+a hundred lines later in `POST`. Those queries were **always empty** — the
+thesis has never influenced the news search.
+
+| Before | After |
+|---|---|
+| scrape | scrape |
+| marketCtx | **relevance gate** ← rejects ~40% before any spend |
+| news *(no watch queries)* | marketCtx + thesis **in parallel** |
+| thesis | news *(watch queries now populated)* |
+| relevance gate | classify |
+| classify | generate |
+
+`marketCtx` and `engagementThesis` both depend only on the scrape and now run
+together. The relevance gate moved to the front, so a rejected row costs one
+small call instead of four large ones.
+
+**Retry budget.** Four steps at three attempts each, plus repair passes, is up
+to twenty sequential model calls for one row. Email 1 keeps three attempts (it
+carries the subject and is the only touch most prospects see); later steps get
+two. A `deadline` is threaded into `generateEmail`, and when a row is running
+close to it, attempts drop to one and repair passes are skipped — so the row
+**finishes and writes a Status** rather than dying mid-flight and leaving the
+sheet blank.
+
 ## Subject lines
 
 These were the output, and all three fail the same way:
@@ -611,6 +770,165 @@ or contains no real name, number, or named segment from the prospect's own
 world. The segment and rival lists from `deriveMarketContext` feed the anchor
 check, so "the UAS underwriting book" passes and "the competitive landscape"
 does not.
+
+## Three bugs that kept rows out of Ready
+
+Every held row said `Needs review: E1: unfixable: banned`. The guard was firing
+correctly and the repair was failing, so nothing reached `Ready`. Three
+separate causes.
+
+**1. Literal bans could not hold a phrasing.**
+`"we track your sector pricing quarterly"` was banned. What shipped instead:
+
+> We track UAS developments quarterly. Here's what we can provide:
+> We track defense spending trends quarterly. We can provide:
+
+The model just varied the noun. Bans are now **patterns**, not strings —
+`/we (track|monitor|watch)\b[^.]{0,50}\b(quarterly|monthly|closely)/` and eight
+more covering "here are three things", "the timing is yours", "I'm not
+chasing", "you can explore more". All of them were seeded by this repo's own
+prompt examples, and all of them frame Kings Research as a monitoring
+subscription rather than a consultancy.
+
+**2. The date rule caused invented dates.**
+
+> AeroVironment's recent partnership with Applied Intuition, announced on
+> **October 12, 2023**
+
+Sent in August 2026. This was my own rule backfiring: "the fact must be
+checkable, name WHEN" meant that when the research returned no date, the model
+produced a plausible one. An invented date is worse than none, because the
+reader *can* check it — and the moment one detail is wrong, every other claim
+in the email becomes suspect.
+
+`dateProblem()` now rejects any year older than last year, any future year, and
+any day-level date that does not match what the research actually returned. The
+prompt was rewritten to prefer relative time ("last month", "this quarter")
+unless the material carries an exact date.
+
+**3. Subjects were topic labels.**
+
+```
+DEAD   "New competitor in Florida UAS market"
+DEAD   "renewable energy project funding"
+DEAD   "defense contractors' shifting priorities"
+DEAD   "your next customer conversations"
+```
+
+Every one is a noun phrase naming a subject area. It asserts nothing and counts
+nothing, so there is no reason to open it — it reads like a filing label.
+
+A subject must now contain **a number, a verb, or a contrast**. Note that
+"your" deliberately does not count on its own: a possessive pronoun in front of
+an abstraction does not make the abstraction concrete, which is why "your next
+customer conversations" still fails.
+
+```
+OPENS  "orlando has a second bidder"      verb
+OPENS  "18 months of award criteria"      number
+OPENS  "seeker vs perimeter tracks"       contrast
+OPENS  "autonomy is scoring now"          verb + tension
+OPENS  "the thaad number tripled"         verb
+OPENS  "your q3 recompetes"               number
+```
+
+## Why nothing reached "Ready"
+
+Status after a run was `Needs review: E1: unfixable: banned` on almost every
+row. Two separate faults.
+
+**A ban removes an option without supplying one.** "We track your sector
+pricing quarterly. Here are three concrete insights:" kept coming back even
+after it was banned outright, because the prompt asked for a lead-in and gave
+the model nowhere else to go. `LEAD_INS` in `lib/angles.js` supplies six
+rotating **stances** (never sentences, so nothing can propagate verbatim):
+where you would start, what a team in their position needs settled first, what
+the first month would answer, and so on. Assigned per prospect by hash.
+
+**The repair pass was too broad.** It received a list of abstract complaints
+and rewrote widely, often reintroducing the same phrase. A **surgical pass**
+now runs first and does one job: it names the exact banned strings and asks for
+the same idea in different words, keeping every fact, number and name. Only if
+that fails does the general repair run.
+
+And the status now names the actual problem: `unfixable: stock phrase "we track
+your sector pricing quarterly"` instead of `unfixable: banned`, which told the
+operator nothing.
+
+Note the seat gate was **not** the blocker: `[influencer 60% decider]` passes
+`meetsReadyBar` on `decisionInfluence`. It was always the copy guards.
+
+## Subject lines, professional register
+
+The all-lowercase "internal note" style was wrong for this business. Kings
+Research is an advisory firm writing to executives; a lowercase fragment from
+an unknown sender reads as careless, not as a peer.
+
+**Sentence case** — first letter capitalised, proper nouns capitalised, nothing
+else. Not all-lowercase (sloppy), not Title Case (a headline, and headlines are
+marketing). 4-8 words, under 55 characters, clean grammar.
+
+Two overlapping topic-label checks had drifted apart and disagreed: one held a
+verb list without gerunds, so `"Autonomy scoring in defense UAS awards"` — a
+perfectly good subject — was rejected. Consolidated into one check that accepts
+a number, a verb in **any** form including gerunds, a tension marker, or a named
+entity.
+
+```
+OPENS  "Autonomy scoring in defense UAS awards"
+OPENS  "Patriot output tripled, radar knock-on"
+OPENS  "Florida just added a second drone bidder"
+OPENS  "Is autonomy scored in your recompetes?"
+OPENS  "FISP cycle 10 conversion rates"
+OPENS  "Applied Intuition signed to Mayhem-10"
+
+DEAD   "your next customer conversations"          lowercase, and abstract
+DEAD   "renewable energy project funding"          topic label
+DEAD   "Northrop's $3B contract and your pricing"  joiner formula
+DEAD   "Wing opened Orlando last month"            opens on a stranger
+```
+
+## Timeouts, and the pipeline order
+
+A row died at exactly 60 seconds with `Unexpected token 'A', "An error o"... is
+not valid JSON`. That is not a code bug in the usual sense: the function hit
+its ceiling, Vercel returned its HTML error page, and the client called
+`.json()` on it.
+
+Three fixes.
+
+**The client now reports what happened.** `page.jsx` reads the response as text
+first and only then parses, so a timeout says *"server timed out on this row
+(504)"* rather than a parser error that points nowhere.
+
+**`maxDuration` raised 60 → 300**, in both `vercel.json` and the route. Note
+this requires a Vercel plan that permits it; Hobby caps at 60.
+
+**The order was wrong, and expensively so.** `research()` read
+`lead.__thesis` for its news watch queries, but the thesis was not built until
+a hundred lines later in `POST`. Those queries were **always empty** — the
+thesis has never influenced the news search.
+
+| Before | After |
+|---|---|
+| scrape | scrape |
+| marketCtx | **relevance gate** ← rejects ~40% before any spend |
+| news *(no watch queries)* | marketCtx + thesis **in parallel** |
+| thesis | news *(watch queries now populated)* |
+| relevance gate | classify |
+| classify | generate |
+
+`marketCtx` and `engagementThesis` both depend only on the scrape and now run
+together. The relevance gate moved to the front, so a rejected row costs one
+small call instead of four large ones.
+
+**Retry budget.** Four steps at three attempts each, plus repair passes, is up
+to twenty sequential model calls for one row. Email 1 keeps three attempts (it
+carries the subject and is the only touch most prospects see); later steps get
+two. A `deadline` is threaded into `generateEmail`, and when a row is running
+close to it, attempts drop to one and repair passes are skipped — so the row
+**finishes and writes a Status** rather than dying mid-flight and leaving the
+sheet blank.
 
 ## Subject lines that get opened
 
