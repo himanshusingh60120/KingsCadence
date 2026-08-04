@@ -330,8 +330,18 @@ export async function POST(req) {
       // The seat bar (80% buy likelihood, or decision influence) is applied
       // where it belongs: it decides JT membership, not send-readiness. A seat
       // below it is written "Not present in JT" and never gets emails at all.
-      if (qualityIssues.length) {
+      // Style findings go to Signal and never block. INVENTED FACTS are the
+      // one exception, and they are not a style finding: a figure the reader
+      // can check and find false destroys the firm's credibility with that
+      // person permanently. Better to send nothing on that row.
+      const fabricated = qualityIssues.filter((q) => /appear nowhere in the research|placeholder|outside the current window|no research behind them/i.test(q));
+      if (qualityIssues.length && !fabricated.length) {
         cells["Signal"] = `${cells["Signal"]} | copy: ${qualityIssues[0].replace(/^E(\d): (unfixable: )?/, "E$1 ")}`.slice(0, 250);
+      }
+      if (fabricated.length) {
+        cells["Status"] = `Do not send: ${fabricated[0]}`.slice(0, 240);
+        await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, cells);
+        return NextResponse.json({ ok: true, timezone, signal, blocked: fabricated[0], results });
       }
       if (!review.ready && review.reason) {
         // Still recorded, still not blocking: an email with no outside view is
