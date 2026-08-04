@@ -173,6 +173,13 @@ export async function POST(req) {
     // company, buy or champion market intelligence? The company half of that
     // matters more than the title half.
     const rel = await judgeRelevance(lead, companyIntel);
+    // The seat bar is part of the bracket decision, not a separate gate later
+    // on: a seat that would not buy and cannot influence the buyer is simply
+    // not in the target bracket, and should cost nothing to establish.
+    if (rel.relevant && !meetsReadyBar(rel)) {
+      rel.relevant = false;
+      rel.reason = `seat unlikely to buy (${rel.buyLikelihood || 0}%, no decision influence)`;
+    }
     if (!rel.relevant) {
       const enrichable = isUnparseableTitle(lead);
       await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, {
@@ -254,7 +261,7 @@ export async function POST(req) {
     // Broken company data (a bare domain / empty) would risk a hallucinated
     // company name (e.g. "Morson Praxis"), so skip generation and flag it.
     if (review.skipGeneration) {
-      cells["Status"] = `Needs review: ${review.reason}`;
+      cells["Status"] = `Needs data: ${review.reason}`;
       await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, cells);
       return NextResponse.json({
         ok: true, timezone, signal, held: review.reason,
@@ -309,36 +316,37 @@ export async function POST(req) {
       }
     }
     const anyEmail = results.some((r) => r.subject && !r.failed);
-    // Only rows with a real signal AND clean data are auto-marked Ready; a
-    // no-signal draft is generated but flagged so a person decides before send.
     if (anyEmail) {
-      // Copy that could not be repaired to pass the banned-phrase, length,
-      // pitch-shape and mirror guards is held even when the targeting was
-      // fine. A held row costs nothing; a shipped row that reads as AI costs
-      // the sending domain.
-      // THE READY BAR. Three things must all hold: the copy passed every
-      // guard, the row has a real give, AND the seat would actually buy
-      // (80%+) or can put a proposal in front of whoever signs. A flawless
-      // email to someone who cannot act on it still costs send volume and
-      // domain reputation.
-      const seatReady = meetsReadyBar(rel);
-      // Soft phrasing no longer holds a row: it is recorded in Signal so
-      // patterns stay visible, but the row ships. A status column that always
-      // reads "needs review" gets ignored and then bulk-approved, which is
-      // worse than sending an email with one hedge left in it.
-      const blocking = qualityIssues.filter((q) => !/weak phrasing/i.test(q));
-      if (qualityIssues.length && !blocking.length) {
-        cells["Signal"] = `${cells["Signal"]} | soft: ${qualityIssues[0].replace(/^E\d: unfixable: /, "")}`.slice(0, 250);
+      // ── STATUS ───────────────────────────────────────────────────────
+      // ONE thing decides Ready: does this person belong in the target
+      // bracket. Nothing else holds a row.
+      //
+      // Copy quality used to block sends, and the result was a status column
+      // that read "Needs review" on nearly every row. An operator facing that
+      // stops reading the reasons and bulk-approves, so the guard protected
+      // nothing and cost every send. Quality findings now go to Signal, where
+      // they stay visible and can be reviewed in bulk without gating anything.
+      //
+      // The seat bar (80% buy likelihood, or decision influence) is applied
+      // where it belongs: it decides JT membership, not send-readiness. A seat
+      // below it is written "Not present in JT" and never gets emails at all.
+      if (qualityIssues.length) {
+        cells["Signal"] = `${cells["Signal"]} | copy: ${qualityIssues[0].replace(/^E(\d): (unfixable: )?/, "E$1 ")}`.slice(0, 250);
       }
-      if (blocking.length) {
-        cells["Status"] = `Needs review: ${blocking[0]}`.slice(0, 240);
-      } else if (!review.ready) {
-        cells["Status"] = `Needs review: ${review.reason}`;
-      } else if (!seatReady) {
-        cells["Status"] = `Needs review: seat unlikely to buy (${rel.buyLikelihood || 0}%, no decision influence)`;
-      } else {
-        cells["Status"] = "Ready";
+      if (!review.ready && review.reason) {
+        // Still recorded, still not blocking: an email with no outside view is
+        // weaker, but it is a judgement call for the operator, not a veto.
+        cells["Signal"] = `${cells["Signal"]} | ${review.reason}`.slice(0, 250);
       }
+      cells["Status"] = "Ready";
+    }
+
+    if (!anyEmail) {
+      // Nothing was written, so there is nothing to send. This is a failure,
+      // not a quality judgement, and the reason belongs in Status because the
+      // row needs re-running rather than reviewing.
+      const why = (results.find((r) => r.reason) || {}).reason || "generation failed";
+      cells["Status"] = `Retry: ${why}`.slice(0, 240);
     }
 
     await writeRowCells(spreadsheetId, sheetName, rowNumber, headerIndex, cells);
