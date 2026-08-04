@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "check": "node scripts/check-refs.mjs",
+    "prebuild": "node scripts/check-refs.mjs",
+    "jt": "node scripts/jt-check.mjs"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
@@ -14,5 +17,10 @@
     "openai": "^4.56.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "acorn": "^8.18.0",
+    "acorn-jsx": "^5.3.2",
+    "acorn-walk": "^8.3.5"
   }
 }
