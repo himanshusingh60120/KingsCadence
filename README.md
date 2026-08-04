@@ -291,6 +291,72 @@ Stale beats nothing is false in this business. A cold email is only credible if
 the event is live: sending a two-year-old headline tells the reader you are not
 actually watching their market, which is the one thing you are selling.
 
+## Certain about facts, modest about their business
+
+This is the whole difference between a consultant and a cold caller, and the
+engine was on the wrong side of it:
+
+> Your next conversations with military buyers regarding UAS technology **will
+> face** increased competition. This shift **will alter your pricing
+> strategies** and affect buyer preferences.
+
+Read it as the person receiving it. A stranger has just told a twenty-year
+industry veteran what their own conversations will be like and what their
+pricing will do. The first reaction is not interest, it is irritation.
+
+The rule now enforced:
+
+| About | Stance |
+|---|---|
+| What happened **outside** their company | **Definite.** State it flatly, with a date, a number, a counterparty. Hedging on verifiable facts just reads as unsure. |
+| What it means **inside** their company | **Modest.** They know their book, pipeline and roadmap. Offer the implication as a condition they can test, or as the question it raises. |
+
+`presumptionProblem()` rejects the second-person future assertion, which is
+always the presumptuous move:
+
+```
+REJECT  "Your next conversations ... will face increased competition"
+REJECT  "This shift will alter your pricing strategies"
+REJECT  "Your market share will shift up to 25%"
+REJECT  "You will need to reconsider your positioning"
+
+PASS    "Whether that reaches your recompetes depends on whether autonomy
+         is already a scoring line"
+PASS    "AeroVironment signed Applied Intuition on 14 July"
+PASS    "Reply and I will send the award-criteria read"
+```
+
+**This is not hedging.** Hedging is being vague about facts, and it is weak.
+This is being precise about facts and honest about the limits of what an
+outsider can know — which is what earns a reply from a senior person.
+
+Supporting this, the E1 fact must now be **checkable**: a month or a quarter,
+plus the number or counterparty where the material carries one. A fact a reader
+can verify in thirty seconds is what makes the rest of the email trustworthy;
+an undated claim is indistinguishable from a guess and gets treated as one.
+Dates and figures are never invented — if the research did not return one, the
+email says only what the research carries.
+
+## Consultants, not a monitoring service
+
+> We track competitor moves quarterly. Here are three concrete insights:
+
+Wrong frame twice over: it makes the email about what Kings Research *watches*,
+and it casts the firm as a surveillance subscription. The lead-in is now about
+what you would **do with a team in their position** — where you would start,
+what the first month settles.
+
+The bullets changed with it. Each is a piece of work that produces a decision,
+phrased as what it settles:
+
+| Monitoring (wrong) | Consulting (right) |
+|---|---|
+| The impact of AeroVironment's new software on customer adoption in defense | Where autonomy actually appears in the last two years of defence UAS award criteria, so you know whether it scores or just impresses |
+| Recent shifts in procurement patterns from military organizations | Which of your recompetes already carry autonomy language in the requirement, pulled from the solicitations themselves |
+
+That is the difference between a service you subscribe to and a consultant you
+hire.
+
 ## Effect first, cause second
 
 The single biggest structural change. Every previous email announced somebody
