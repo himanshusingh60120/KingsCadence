@@ -6,6 +6,7 @@ import { resolveTimezone } from "../../../lib/timezone";
 import { isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/titles";
 import { judgeRelevance } from "../../../lib/relevance";
 import { parseInsights, matchInsight, INSIGHTS_HEADER } from "../../../lib/insights";
+import { engagementThesis } from "../../../lib/thesis";
 
 // The Insight Library is read once per warm instance, not once per row: it is
 // the same 40-60 findings for every prospect in a run.
@@ -76,7 +77,8 @@ async function research(lead) {
       revenue: lead.companyRevenue,
       subIndustry: lead.subIndustry,
       competitors,
-      domainQueries: marketCtx.domainQueries
+      domainQueries: marketCtx.domainQueries,
+      watchQueries: (lead.__thesis && lead.__thesis.watchQueries) || []
     });
     return [companyIntel, news, competitors, marketCtx];
   };
@@ -85,8 +87,19 @@ async function research(lead) {
 }
 
 export async function POST(req) {
+  // Captured OUTSIDE the try so the catch can still write a Status. The old
+  // code called req.clone().json() in the catch, which throws because the
+  // body stream was already consumed by req.json() here, so the catch failed
+  // silently and the row was left completely blank: no emails, no status, no
+  // error. Three rows vanished that way in the last run.
+  let reqBody = {};
   try {
-    const { spreadsheetId, sheetName, rowNumber, force } = await req.json();
+    reqBody = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid request body" }, { status: 400 });
+  }
+  try {
+    const { spreadsheetId, sheetName, rowNumber, force } = reqBody;
 
     const { headers, rows } = await readSheet(spreadsheetId, sheetName);
     const headerIndex = {};
@@ -154,6 +167,22 @@ export async function POST(req) {
     // rivals. Attaching it to the lead is what lets the bullet guard check
     // that each bullet names something from THIS prospect's world.
     lead.__profile = marketCtx;
+
+    // ── ENGAGEMENT THESIS ────────────────────────────────────────────────
+    // What are they really, what decisions does their leadership own, and
+    // what could Kings Research actually sell them. Built once per company.
+    // Email 1's bullets are drawn from its deliverables list rather than
+    // invented from a headline, which is what stops them coming out as
+    // speculations ("how many partnerships MAY shift...").
+    const thesis = await engagementThesis(lead, companyIntel);
+    if (thesis) {
+      lead.__thesis = thesis;
+      lead.__profile = {
+        ...marketCtx,
+        segments: thesis.segments.length ? thesis.segments : marketCtx.segments,
+        rivals: thesis.rivals.length ? thesis.rivals : marketCtx.rivals
+      };
+    }
 
     const rel = await judgeRelevance(lead, companyIntel);
     if (!rel.relevant) {
@@ -241,7 +270,7 @@ export async function POST(req) {
         results.push({ step, skipped: true });
         continue;
       }
-      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight, earlierBodies, marketCtx.buyerWorld);
+      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight, earlierBodies, thesis ? thesis.whoPaysThem : marketCtx.buyerWorld, thesis);
       if (out.quality && out.quality !== "ok") qualityIssues.push(`E${step}: ${out.quality}`);
       if (out.body !== "GENERATION_FAILED") {
         if (scKey && out.subject) {
@@ -325,12 +354,11 @@ export async function POST(req) {
     // row blank: not Ready, not rejected, just invisible. Every row now ends
     // with a Status, so nothing can silently disappear from a bulk run.
     try {
-      const body = await req.clone().json().catch(() => ({}));
-      if (body && body.spreadsheetId && body.sheetName && body.rowNumber) {
-        const { headers } = await readSheet(body.spreadsheetId, body.sheetName);
+      if (reqBody && reqBody.spreadsheetId && reqBody.sheetName && reqBody.rowNumber) {
+        const { headers } = await readSheet(reqBody.spreadsheetId, reqBody.sheetName);
         const hi = {};
         headers.forEach((h, i) => { hi[h] = i + 1; });
-        await writeRowCells(body.spreadsheetId, body.sheetName, body.rowNumber, hi, {
+        await writeRowCells(reqBody.spreadsheetId, reqBody.sheetName, reqBody.rowNumber, hi, {
           "Status": `Error: ${String(e.message || e).slice(0, 180)}`
         });
       }
