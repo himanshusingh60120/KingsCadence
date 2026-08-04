@@ -291,6 +291,65 @@ Stale beats nothing is false in this business. A cold email is only credible if
 the event is live: sending a two-year-old headline tells the reader you are not
 actually watching their market, which is the one thing you are selling.
 
+## Subject lines
+
+These were the output, and all three fail the same way:
+
+```
+Wing's Florida entry + your contracts
+USCG's focus on illicit flow + your pricing
+Northrop's $3B contract and your pricing
+```
+
+The formula came from this repo's own prompt, which carried
+`"Wing's Florida move + your rates"` as an *example*. Prompt examples become
+templates — the same mistake as the boilerplate openings, made again.
+
+Three problems, all one problem:
+
+1. **It is a formula.** `[outside thing] + [your thing]`. A reader pattern-matches
+   that in half a second, because everything arriving in that shape is a pitch.
+2. **The joiner is a machine artefact.** People do not write plus signs in
+   subject lines. Filters read it as promotional too.
+3. **It summarises the email.** If the subject already says what the email is
+   about, opening it has no payoff.
+
+A subject line has one job: **make the first line worth reading.** Not sell,
+not summarise, not qualify.
+
+New rules: 2-6 words, under 40 characters (a phone shows about 35), all
+lowercase or sentence case, no joiners, and it must not summarise. The target
+is something indistinguishable from a note a colleague typed in four seconds —
+internal mail is the only category of email that is never a pitch.
+
+`SUBJECT_SHAPES` is now six **registers** rather than templates: a fragment of
+the finding, a noun that belongs only to them, the bare number, peer-shorthand,
+the question they are already asking internally, or one concrete noun from
+their week. Each describes a stance and gives no copyable string, so the model
+has to compose the line.
+
+```
+DEAD   "Wing's Florida entry + your contracts"        joiner formula
+DEAD   "Northrop's $3B contract and your pricing"     joiner formula
+DEAD   "Global Aerospace's in-orbit servicing..."     50 chars, cut off
+DEAD   "The Impact Of Autonomy On Defense..."         Title Case headline
+DEAD   "quick question about your drone programme"    on every ignore list
+DEAD   "market trends and opportunities"              every word abstract
+
+OPENS  "your q3 recompetes"
+OPENS  "orlando has a second bidder"
+OPENS  "18 months of award criteria"
+OPENS  "seeker vs perimeter tracks"
+OPENS  "autonomy is scoring now"
+OPENS  "mayhem-10"
+```
+
+One subtlety worth recording: the first version of this guard demanded a
+capital letter as proof of a proper noun, which directly contradicted the
+lowercase rule and killed good lines like `orlando has a second bidder`. It now
+tests **concreteness** instead — rejecting only when every content word is
+abstract.
+
 ## Certain about facts, modest about their business
 
 This is the whole difference between a consultant and a cold caller, and the
