@@ -291,6 +291,81 @@ Stale beats nothing is false in this business. A cold email is only credible if
 the event is live: sending a two-year-old headline tells the reader you are not
 actually watching their market, which is the one thing you are selling.
 
+## Effect first, cause second
+
+The single biggest structural change. Every previous email announced somebody
+else's transaction and then asserted an effect:
+
+> Procore's recent $845M acquisition of DroneDeploy will shift your customer
+> landscape in drone operations technology.
+
+The reader's eye travels through a stranger's news before reaching anything of
+theirs — and on a phone that is the entire preview pane. Same facts, reordered:
+
+> Your next few renewal conversations in UAS compliance are going to run into a
+> bundled competitor that was not there last quarter. Procore bought
+> DroneDeploy for $845M and is folding it into a platform your buyers already
+> licence.
+
+The reader appears in sentence one. The outside company appears in sentence
+two, where it belongs — as the reason.
+
+`openingProblem()` enforces it in code, because the prompt asked for this
+before and the model kept reverting: the events it is handed are competitor
+events, and restating one is the path of least resistance.
+
+```
+REJECT  "Procore's recent $845M acquisition of DroneDeploy will shift..."
+        -> opens on "Procore", which is somebody else's news
+PASS    "Your next few renewal conversations in UAS compliance..."
+```
+
+Subjects follow the same rule: a subject may not **start** with another
+company's name. "Procore's $845M acquisition of DroneDeploy" is a headline
+about a stranger — nothing in it belongs to the reader, so there is no reason
+to open. It should name what is now in question for them.
+
+## Grammar, fixed deterministically
+
+Bullets were arriving half capitalised and half not, within the same email, and
+sentences after a full stop were left lowercase. It reads as careless, which is
+fatal in an email whose entire claim is rigour.
+
+`normalizeProse()` runs after generation rather than being asked for in the
+prompt, because a prompt cannot guarantee it and this can: every line and list
+item capitalised, sentence case restored after `. ? !` while skipping
+abbreviations (`U.S.`, `e.g.`, `Inc.`), and trailing periods normalised across
+a list so items match each other.
+
+## The connect link
+
+`https://www.kingsresearch.com/connect` is woven **into a sentence**, never
+appended as a footer and never on its own line — `linkProblem()` rejects a bare
+URL line, a missing link, and any duplicate.
+
+**Deliverability note:** a link in the first touch measurably lowers inbox
+placement on cold sends. `LINK_STEPS` at the top of `lib/engine.js` currently
+reads `[1, 3, 4]` — E2 stays clean because it is a short bump. If seed tests
+show worse placement or reply rates fall, change it to `[3, 4]`.
+
+## The Ready bar
+
+`Ready` now requires three things, not one:
+
+1. the copy passed every guard,
+2. the row has a real give, **and**
+3. **the seat would actually buy** — `buyLikelihood >= 80`, or
+   `decisionInfluence` true (they set requirements, run the evaluation, or own
+   the problem, even without the budget).
+
+The judge scores the seat, not the person: a Head of Corporate Strategy at a
+mid-size manufacturer is 85+, a VP Marketing 70-80, a Product Manager 40-60, an
+IT Director under 20. `Signal` now shows it — `[buyer 85% decider]` — so a
+held row explains itself.
+
+A flawless email to someone who cannot act on it still costs send volume and
+domain reputation.
+
 ## Why every email looked the same
 
 Twenty rows came back with the same shape:
