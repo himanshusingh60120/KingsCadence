@@ -7,6 +7,8 @@ import { isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/ti
 import { judgeRelevance, meetsReadyBar } from "../../../lib/relevance";
 import { parseInsights, matchInsight, INSIGHTS_HEADER } from "../../../lib/insights";
 import { engagementThesis } from "../../../lib/thesis";
+import { buildDossier, dossierMarkdown, dossierSignal } from "../../../lib/dossier";
+import { hasWebSearch } from "../../../lib/search";
 
 // The Insight Library is read once per warm instance, not once per row: it is
 // the same 40-60 findings for every prospect in a run.
@@ -217,9 +219,23 @@ export async function POST(req) {
       };
     }
 
-    // ── 4) NEWS ──────────────────────────────────────────────────────────
-    // Now genuinely receives the thesis watch queries, which it never did.
-    const news = await gatherNews(lead, marketCtx, thesis, competitors);
+    // ── 4) NEWS + DOSSIER, IN PARALLEL ───────────────────────────────────
+    // These are two independent retrieval paths over the same question and
+    // they run together because neither depends on the other.
+    //
+    // The dossier is the primary path: real search, citations, a sourcing
+    // check on every claim. Google News RSS is retained as the secondary,
+    // because it is free and occasionally surfaces a local or trade item the
+    // search misses. Where they disagree, the dossier wins, because only its
+    // items were verified against the page they came from.
+    //
+    // Running them together costs nothing in wall clock and means a dossier
+    // failure (no key, rate limit, timeout) degrades exactly to today's
+    // behaviour rather than to an empty row.
+    const [news, dossier] = await Promise.all([
+      gatherNews(lead, marketCtx, thesis, competitors),
+      buildDossier(lead, companyIntel, thesis, { deadline })
+    ]);
     // The window the news filter actually used, so the date guard knows what
     // could legitimately have come back.
     lead.__maxAgeDays = quarterWindowDays();
@@ -246,15 +262,34 @@ export async function POST(req) {
     const insight = matchInsight(lead, companyIntel, library);
 
     // What this row anchored on (written to the sheet for visibility).
+    //
+    // The old "NO GIVE (no finding matched, no event found)" was accurate and
+    // useless: it named the absence without saying whether the research had
+    // run and found nothing, or never ran at all. Those need different fixes.
+    const dSignal = dossierSignal(dossier);
     const signal = insight
       ? `finding: ${insight.finding}`.slice(0, 240)
-      : events.length
-        ? `${events[0].subject}/${events[0].type}: ${events[0].what}`.slice(0, 240)
-        : "NO GIVE (no finding matched, no event found)";
+      : dossier && !dossier.empty && dossier.hooks.length
+        ? `hook: ${dossier.hooks[0].hook}`.slice(0, 240)
+        : events.length
+          ? `${events[0].subject}/${events[0].type}: ${events[0].what}`.slice(0, 240)
+          : hasWebSearch()
+            ? "NO GIVE (search ran, nothing survived sourcing)"
+            : "NO GIVE (no search provider configured, RSS only)";
 
     // Decide if this row is safe to auto-send or should be held for a human.
-    const review = reviewStatus(lead, events, insight);
-    const cells = { "Signal": `[${rel.verdict} ${rel.buyLikelihood || 0}%${rel.decisionInfluence ? " decider" : ""}] ${signal}`.slice(0, 250) };
+    const review = reviewStatus(lead, events, insight, dossier);
+    const cells = { "Signal": `[${rel.verdict} ${rel.buyLikelihood || 0}%${rel.decisionInfluence ? " decider" : ""}] ${signal}${dSignal ? ` | ${dSignal}` : ""}`.slice(0, 250) };
+
+    // The research, in the sheet. A Google Sheets cell holds 50k characters,
+    // so the full dossier fits comfortably; it is truncated well short of
+    // that only to keep the tab responsive to scroll.
+    if (dossier) {
+      cells["Dossier"] = dossierMarkdown(lead, dossier).slice(0, 45000);
+      cells["Hooks"] = (dossier.hooks || [])
+        .map((h, i) => `${i + 1}. [${h.strength}] ${h.hook}\n   evidence: ${h.evidence}`)
+        .join("\n") || "(none)";
+    }
     // Surface the recovered real company name back in the sheet's company column.
     if (companyNameFixed) cells["company"] = lead.companyName;
 
@@ -299,7 +334,7 @@ export async function POST(req) {
         results.push({ step, failed: true, reason: "out of time" });
         continue;
       }
-      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight, earlierBodies, thesis ? thesis.whoPaysThem : marketCtx.buyerWorld, thesis, deadline);
+      const out = await generateEmail(step, lead, companyIntel, news, events, usedSubjects, usedCTAs, insight, earlierBodies, (dossier && dossier.domain && dossier.domain.buyers) || (thesis ? thesis.whoPaysThem : marketCtx.buyerWorld), thesis, deadline, dossier);
       if (out.quality && out.quality !== "ok") qualityIssues.push(`E${step}: ${out.quality}`);
       if (out.body !== "GENERATION_FAILED") {
         if (scKey && out.subject) {
@@ -334,7 +369,7 @@ export async function POST(req) {
       // one exception, and they are not a style finding: a figure the reader
       // can check and find false destroys the firm's credibility with that
       // person permanently. Better to send nothing on that row.
-      const fabricated = qualityIssues.filter((q) => /appear nowhere in the research|placeholder|outside the current window|no research behind them/i.test(q));
+      const fabricated = qualityIssues.filter((q) => /appear nowhere in the research|placeholder|outside the current window|no research behind them|were invented/i.test(q));
       if (qualityIssues.length && !fabricated.length) {
         cells["Signal"] = `${cells["Signal"]} | copy: ${qualityIssues[0].replace(/^E(\d): (unfixable: )?/, "E$1 ")}`.slice(0, 250);
       }
@@ -370,10 +405,16 @@ export async function POST(req) {
     let derivedTargets = 0;
     try {
       const selfEvent = events.find((e) => e.subject === "self" && e.scope === "company");
-      if (selfEvent && competitors && competitors.length) {
+      // Verified rivals first. A derived target that has been out of business
+      // for two years is worse than no derived target: it goes into a list a
+      // human then works.
+      const fanout = (dossier && dossier.domain && dossier.domain.competitors.length)
+        ? dossier.domain.competitors
+        : competitors;
+      if (selfEvent && fanout && fanout.length) {
         const seen = globalThis.__kc_derivedSeen || (globalThis.__kc_derivedSeen = new Set());
         const rowsOut = [];
-        for (const c of competitors.slice(0, 5)) {
+        for (const c of fanout.slice(0, 5)) {
           const key = `${c.name}::${selfEvent.what}`.toLowerCase();
           if (seen.has(key)) continue;
           seen.add(key);
@@ -404,6 +445,14 @@ export async function POST(req) {
       signal,
       eventsUsed: events.length,
       newsUsed: news.items.length,
+      dossier: dossier ? {
+        empty: !!dossier.empty,
+        news: (dossier.news || []).length,
+        marketMoves: dossier.domain ? dossier.domain.domainMoves.length : 0,
+        competitors: dossier.domain ? dossier.domain.competitors.length : 0,
+        personConfirmed: !!dossier.person,
+        hooks: (dossier.hooks || []).length
+      } : null,
       derivedTargets,
       results
     });
