@@ -8,7 +8,8 @@
     "start": "next start",
     "check": "node scripts/check-refs.mjs",
     "prebuild": "node scripts/check-refs.mjs",
-    "jt": "node scripts/jt-check.mjs"
+    "jt": "node scripts/jt-check.mjs",
+    "dossier": "node scripts/dossier.mjs"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
