@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { readSheet, writeRowCells, appendRows, readTabSafe, ensureTab } from "../../../lib/google";
-import { companyWebsiteIntel, newsSignalsWithFallback, classifyEvents, deriveMarketContext, quarterWindowDays } from "../../../lib/research";
+import { companyWebsiteIntel, newsSignalsWithFallback, classifyEvents, deriveMarketContext, quarterWindowDays, MAX_NEWS_AGE_DAYS } from "../../../lib/research";
 import { generateEmail, reviewStatus, sortEvents } from "../../../lib/engine";
 import { resolveTimezone } from "../../../lib/timezone";
 import { isUnparseableTitle, NOT_IN_JT, NEEDS_ENRICHMENT } from "../../../lib/titles";
@@ -236,9 +236,22 @@ export async function POST(req) {
       gatherNews(lead, marketCtx, thesis, competitors),
       buildDossier(lead, companyIntel, thesis, { deadline })
     ]);
-    // The window the news filter actually used, so the date guard knows what
-    // could legitimately have come back.
-    lead.__maxAgeDays = quarterWindowDays();
+    // The widest window ANY retrieval path could legitimately have returned.
+    //
+    // This was previously set to quarterWindowDays(), which can be as low as
+    // 60, and then never read by anything: staleDateProblem fell back to its
+    // own default. Had it been wired up as written, a perfectly good dossier
+    // item from 100 days ago would have been rejected as "outside the current
+    // window" — and that phrase is in the BLOCKING list, so it would have
+    // killed the row outright rather than just flagging it.
+    //
+    // The news fallback widens to MAX_NEWS_AGE_DAYS and the dossier window is
+    // DOSSIER_NEWS_DAYS, so the guard must allow the larger of the two.
+    lead.__maxAgeDays = Math.max(
+      quarterWindowDays(),
+      MAX_NEWS_AGE_DAYS,
+      Number(process.env.DOSSIER_NEWS_DAYS || 0) || 0
+    );
 
     // 2) EVENT TYPING: GPT turns noisy headlines into real, typed events, each
     //    with the strategic "angle" it raises, and drops third-party industry
