@@ -9,7 +9,8 @@
     "check": "node scripts/check-refs.mjs",
     "prebuild": "node scripts/check-refs.mjs",
     "jt": "node scripts/jt-check.mjs",
-    "dossier": "node scripts/dossier.mjs"
+    "dossier": "node scripts/dossier.mjs",
+    "doctor": "node scripts/doctor.mjs"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
