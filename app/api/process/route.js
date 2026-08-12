@@ -278,6 +278,12 @@ export async function POST(req) {
             : "NO GIVE (no search provider configured, RSS only)";
 
     // Decide if this row is safe to auto-send or should be held for a human.
+    // A failing search looks exactly like a quiet prospect in the sheet, and
+    // the last run had all 20 rows reading "dossier: empty". That was one
+    // config fault, not twenty quiet companies. Say so loudly and once.
+    if (dossier && dossier.empty && dossier.error) {
+      console.error(`[dossier] search failed for ${lead.companyName}: ${dossier.error}`);
+    }
     const review = reviewStatus(lead, events, insight, dossier);
     const cells = { "Signal": `[${rel.verdict} ${rel.buyLikelihood || 0}%${rel.decisionInfluence ? " decider" : ""}] ${signal}${dSignal ? ` | ${dSignal}` : ""}`.slice(0, 250) };
 
